@@ -1,0 +1,26 @@
+weekday_dict: {'mon': 1, 'tue': 2, 'wed': 3, 'thu': 4, 'fri': 5, 'sat': 6, 'sun': 7}
+month_dict: {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6, 'jul': 7,
+              'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12}
+ord_edu: ['illiterate', 'basic.4y', 'basic.6y', 'basic.9y', 'unknown', 'high.school',
+           'professional.course', 'university.degree']
+
+categorical_cols: ['job', 'marital', 'education', 'housing', 'loan', 'contact',  'poutcome']
+num_cols: ['pdays', 'emp.var.rate', 'cons.price.idx', 'cons.conf.idx', 'euribor3m', 'nr.employed']
+other_cols: ['default', 'month_sin', 'month_cos', 'weekday_sin', 'weekday_cos']
+log_cols: ['age', 'campaign', 'previous']
+
+current_campaign_cols: ['contact', 'campaign']
+categorical_cols_excl: ['job', 'marital', 'education', 'housing', 'loan', 'poutcome']
+num_cols_excl: ['pdays', 'emp.var.rate', 'cons.price.idx', 'cons.conf.idx', 'euribor3m', 'nr.employed']
+other_cols_excl: ['default']
+log_cols_excl: ['age', 'previous']
+
+lgbm_params: {
+                'lgbmclassifier__learning_rate': [0.01,0.03,0.05,0.1,0.15,0.2],
+                'lgbmclassifier__max_depth': [6,8,10,12,16,20,30],
+                'lgbmclassifier__num_leaves': [8,16,32,64,96,144],
+                'lgbmclassifier__feature_fraction': [0.2, 0.4, 0.8, 1],
+                'lgbmclassifier__subsample': [0.2, 0.4, 0.8, 1],
+                'lgbmclassifier__is_unbalance': [True,False],
+              }
+
