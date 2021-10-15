@@ -5,13 +5,11 @@ from typing import Union
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder, MinMaxScaler
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder, MinMaxScaler, FunctionTransformer
 from sklearn.compose import ColumnTransformer
-from sklearn.model_selection import GridSearchCV
 from lightgbm import LGBMClassifier
 from sklearn.pipeline import make_pipeline, Pipeline
-from sklearn.preprocessing import FunctionTransformer
 from sklearn.metrics import roc_auc_score, confusion_matrix, recall_score, precision_score
 
 
@@ -35,12 +33,12 @@ other_cols_excl = ['default']
 log_cols_excl = ['age', 'previous']
 
 lgbm_params = {
-                'lgbmclassifier__learning_rate': [0.01,0.03,0.05,0.1,0.15,0.2],
-                'lgbmclassifier__max_depth': [6,8,10,12,16],
-                'lgbmclassifier__num_leaves': [8,16,32,64,96,144],
-                'lgbmclassifier__feature_fraction': [0.4, 0.8, 1],
-                'lgbmclassifier__subsample': [0.4, 0.8, 1],
-                'lgbmclassifier__is_unbalance': [True],
+                'learning_rate': [0.01,0.03,0.05,0.1,0.15,0.2],
+                'max_depth': [6,8,10,12,16],
+                'num_leaves': [8,16,32,64,96,144],
+                'feature_fraction': [0.4, 0.8, 1],
+                'subsample': [0.4, 0.8, 1],
+                'is_unbalance': [True],
               }
 
 
@@ -60,6 +58,13 @@ def compare_auc(modelfull: Pipeline, modelred: Pipeline) -> None:
                             - roc_auc_score(modelred.y_test, modelred.predict(modelred.X_test)), 3)
 
     print(f"""Adding campaign related features to the model resulted in {roc_auc_diff} increase in ROC AUC score""")
+
+
+def get_roc_auc_diff(pipe1, pipe2):
+    roc_auc_diff = np.round(roc_auc_score(pipe1.y_test, pipe1.grid_pipe_lgbm.predict(pipe1.X_test_enc))
+                            - roc_auc_score(pipe2.y_test, pipe2.grid_pipe_lgbm.predict(pipe2.X_test_enc)), 3)
+
+    print(f"""Adding campaign related features to the model results in {roc_auc_diff} increase in ROC AUC score""")
 
 
 class BankMarketingModel:
@@ -90,6 +95,17 @@ class BankMarketingModel:
         data.default.replace({'unknown': 1}, inplace=True)
         return data
 
+    def get_names(self):
+        if self.full:
+            self.names = list(self.column_transformer.named_transformers_['ohe']
+                     .named_steps['onehotencoder'].get_feature_names_out(categorical_cols)) \
+                     + num_cols + log_cols + other_cols
+        else:
+            self.names = list(self.column_transformer.named_transformers_['ohe']
+                    .named_steps['onehotencoder'].get_feature_names_out(categorical_cols_excl)) \
+                    + num_cols_excl + log_cols_excl + other_cols_excl
+
+
     def train_bank_model(self) -> None:
 
         data = self.load_data()
@@ -105,7 +121,7 @@ class BankMarketingModel:
         cat_pipe = make_pipeline(FunctionTransformer(to_str), OneHotEncoder(handle_unknown='ignore'))
 
         if self.full:
-            column_transformer = ColumnTransformer([
+            self.column_transformer = ColumnTransformer([
                 ('ohe', cat_pipe, categorical_cols),
                 ('scale', MinMaxScaler(), num_cols),
                 ('log', log_pipe, log_cols),
@@ -113,7 +129,7 @@ class BankMarketingModel:
                 remainder='passthrough', verbose=0
             )
         else:
-            column_transformer = ColumnTransformer([
+            self.column_transformer = ColumnTransformer([
                 ('ohe', cat_pipe, categorical_cols_excl),
                 ('scale', MinMaxScaler(), num_cols_excl),
                 ('log', log_pipe, log_cols_excl),
@@ -122,54 +138,44 @@ class BankMarketingModel:
                 remainder='passthrough', verbose=0
             )
 
-        self.grid_pipe_lgbm = GridSearchCV(make_pipeline(column_transformer, LGBMClassifier()),
-                                      lgbm_params, cv=5, scoring='roc_auc', verbose=2, n_jobs=5)
-        self.grid_pipe_lgbm.fit(self.X_train, self.y_train)
+        self.column_transformer.fit(self.X_train)
+        self.get_names()
+        self.X_train_enc = pd.DataFrame(self.column_transformer.transform(self.X_train), columns=self.names)
+        self.X_val_enc = pd.DataFrame(self.column_transformer.transform(self.X_val), columns=self.names)
+        self.X_test_enc = pd.DataFrame(self.column_transformer.transform(self.X_test),  columns=self.names)
 
-    def get_fimp(self) -> None:
+        self.grid_pipe_lgbm = GridSearchCV(LGBMClassifier(), lgbm_params, cv=5, scoring='roc_auc', verbose=1, n_jobs=5)
+        self.grid_pipe_lgbm.fit(self.X_train_enc, self.y_train)
 
-        pipe = self.grid_pipe_lgbm
-
-        if self.full:
-            names = list(pipe.best_estimator_.named_steps['columntransformer'] \
-                .transformers_[0][1][1].get_feature_names(
-                categorical_cols)) + num_cols + log_cols + other_cols
-        else:
-            names = list(pipe.best_estimator_.named_steps['columntransformer'] \
-                .transformers_[0][1][1].get_feature_names(
-                categorical_cols_excl)) + num_cols_excl + log_cols_excl + other_cols_excl
+    def get_fimp(self, n: int: 20) -> None:
 
         df_feature_importance = (
-            pd.DataFrame({
-                'importance': pipe.best_estimator_._final_estimator.feature_importances_,
-            }, index=names)
-                .sort_values('importance', ascending=False)
+            pd.DataFrame({'importance': self.grid_pipe_lgbm.best_estimator_.feature_importances_,
+            }, index=self.names).sort_values('importance', ascending=False)
         )
 
         plt.figure(figsize=(10, 6))
-        sns.barplot(df_feature_importance.head(20).importance,
-                    df_feature_importance.head(20).index, palette='mako');
-
-        plt.savefig('lgbm_importances-01.png')
+        sns.barplot(df_feature_importance.head(n).importance,
+                    df_feature_importance.head(n).index, palette='mako');
+        # plt.savefig('lgbm_importances-01.png')
 
     def print_metrics(self) -> None:
 
         pipe = self.grid_pipe_lgbm
         print(
-        "ROC AUC train : ", roc_auc_score(self.y_train, pipe.predict(self.X_train)), '\n',
-        "ROC AUC val : ", roc_auc_score(self.y_val, pipe.predict(self.X_val)), '\n',
-        "ROC AUC test : ", roc_auc_score(self.y_test, pipe.predict(self.X_test)), '\n'
+        "ROC AUC train : ", roc_auc_score(self.y_train, pipe.predict(self.X_train_enc)), '\n',
+        "ROC AUC val : ", roc_auc_score(self.y_val, pipe.predict(self.X_val_enc)), '\n',
+        "ROC AUC test : ", roc_auc_score(self.y_test, pipe.predict(self.X_test_enc)), '\n'
         )
 
-        print("Precision test : ", precision_score(self.y_test, pipe.predict(self.X_test)))
-        print("Recall test : ", recall_score(self.y_test, pipe.predict(self.X_test)))
+        print("Precision test : ", precision_score(self.y_test, pipe.predict(self.X_test_enc)))
+        print("Recall test : ", recall_score(self.y_test, pipe.predict(self.X_test_enc)))
 
     def save_pipe(self, n):
-        if self.full:
-            addstr = 'full'
-        else:
-            addstr = 'reduced'
+        addstr = 'full' if self.full else 'reduced'
         with open(f'../models/pipe_{addstr}_{n}.pkl', 'wb') as f:
             pickle.dump(self.grid_pipe_lgbm.best_estimator_, f)
+        with open(f'../models/coltr_{addstr}_{n}.pkl', 'wb') as f:
+            pickle.dump(self.column_transformer, f)
 
 
