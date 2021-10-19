@@ -12,7 +12,7 @@ from lightgbm import LGBMClassifier
 from sklearn.pipeline import make_pipeline, Pipeline
 from sklearn.metrics import roc_auc_score, confusion_matrix, recall_score, precision_score
 
-
+# TODO switch to yaml config
 ord_edu = ['illiterate', 'basic.4y', 'basic.6y', 'basic.9y', 'unknown', 'high.school',
            'professional.course', 'university.degree']
 
@@ -81,6 +81,10 @@ class BankMarketingModel:
         self.y_val = None
 
     def load_data(self) -> pd.DataFrame:
+        """
+
+        :return:
+        """
         if self.path is None:
             path = '/Users/kseniia/OneDrive/MSDS/Thesis/'
             add = 'data/bank-marketing/bank-additional/'
@@ -147,7 +151,7 @@ class BankMarketingModel:
         self.grid_pipe_lgbm = GridSearchCV(LGBMClassifier(), lgbm_params, cv=5, scoring='roc_auc', verbose=1, n_jobs=5)
         self.grid_pipe_lgbm.fit(self.X_train_enc, self.y_train)
 
-    def get_fimp(self, n: int: 20) -> None:
+    def get_fimp(self, n: int = 20) -> None:
 
         df_feature_importance = (
             pd.DataFrame({'importance': self.grid_pipe_lgbm.best_estimator_.feature_importances_,
