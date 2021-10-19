@@ -2,6 +2,7 @@ from sklearn.inspection import PartialDependenceDisplay
 import matplotlib.pyplot as plt
 
 
+# TODO add other explainers from notebook
 def plot_pdp_ice(model, X_train, features, title_fill):
     fig, ax = plt.subplots(figsize=(10, 10))
 
