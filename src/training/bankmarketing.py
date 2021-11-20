@@ -11,26 +11,11 @@ from sklearn.compose import ColumnTransformer
 from lightgbm import LGBMClassifier
 from sklearn.pipeline import make_pipeline, Pipeline
 from sklearn.metrics import roc_auc_score, confusion_matrix, recall_score, precision_score
+from sklearn.base import BaseEstimator, TransformerMixin
 
 # TODO switch to yaml config
 ord_edu = ['illiterate', 'basic.4y', 'basic.6y', 'basic.9y', 'unknown', 'high.school',
            'professional.course', 'university.degree']
-
-# include current campaign data
-categorical_cols = ['job', 'marital', 'education', 'housing', 'loan',
-                   'contact', 'poutcome', 'month','day_of_week']
-num_cols = ['pdays', 'emp.var.rate', 'cons.price.idx',
-            'cons.conf.idx', 'euribor3m', 'nr.employed']
-other_cols = ['default']
-log_cols = ['age', 'campaign', 'previous']
-
-# exclude current campaign data
-current_campaign_cols = ['contact', 'campaign', 'month','day_of_week']
-categorical_cols_excl = ['job', 'marital', 'education', 'housing', 'loan', 'poutcome']
-num_cols_excl = ['pdays', 'emp.var.rate', 'cons.price.idx',
-                 'cons.conf.idx', 'euribor3m', 'nr.employed']
-other_cols_excl = ['default']
-log_cols_excl = ['age', 'previous']
 
 lgbm_params = {
                 'learning_rate': [0.01,0.03,0.05,0.1,0.15,0.2],
@@ -67,6 +52,17 @@ def get_roc_auc_diff(pipe1, pipe2):
     print(f"""Adding campaign related features to the model results in {roc_auc_diff} increase in ROC AUC score""")
 
 
+class IdentityTransformer(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        pass
+
+    def fit(self, input_array, y=None):
+        return self
+
+    def transform(self, input_array, y=None):
+        return input_array * 1
+
+
 class BankMarketingModel:
 
     def __init__(self, path: Union[None, str] = None, full: bool = True) -> None:
@@ -79,6 +75,26 @@ class BankMarketingModel:
         self.y_test = None
         self.X_val = None
         self.y_val = None
+        self.cont_feats = []
+        self.cont_feats_excl = []
+
+        # include current campaign data
+        if self.full:
+            self.categorical_cols = ['job', 'marital', 'education', 'housing', 'loan',
+                                     'contact', 'poutcome', 'month', 'day_of_week']
+            self.num_cols = ['pdays', 'emp.var.rate', 'cons.price.idx',
+                             'cons.conf.idx', 'euribor3m', 'nr.employed']
+            self.other_cols = ['default']
+            self.log_cols = ['age', 'campaign', 'previous']
+
+        # exclude current campaign data
+        else:
+            self.current_campaign_cols = ['contact', 'campaign', 'month', 'day_of_week']
+            self.categorical_cols = ['job', 'marital', 'education', 'housing', 'loan', 'poutcome']
+            self.num_cols = ['pdays', 'emp.var.rate', 'cons.price.idx',
+                                  'cons.conf.idx', 'euribor3m', 'nr.employed']
+            self.other_cols = ['default']
+            self.log_cols = ['age', 'previous']
 
     def load_data(self) -> pd.DataFrame:
         """
@@ -102,21 +118,20 @@ class BankMarketingModel:
     def get_names(self):
         if self.full:
             self.names = list(self.column_transformer.named_transformers_['ohe']
-                     .named_steps['onehotencoder'].get_feature_names_out(categorical_cols)) \
-                     + num_cols + log_cols + other_cols
+                     .named_steps['onehotencoder'].get_feature_names_out(self.categorical_cols)) \
+                     + self.num_cols + self.log_cols + self.other_cols
         else:
             self.names = list(self.column_transformer.named_transformers_['ohe']
-                    .named_steps['onehotencoder'].get_feature_names_out(categorical_cols_excl)) \
-                    + num_cols_excl + log_cols_excl + other_cols_excl
-
+                    .named_steps['onehotencoder'].get_feature_names_out(self.categorical_cols)) \
+                    + self.num_cols + self.log_cols + self.other_cols
 
     def train_bank_model(self) -> None:
 
-        data = self.load_data()
-        data = self.preprocess(data)
+        self.data = self.load_data()
+        self.data = self.preprocess(self.data)
 
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(data.drop(columns=['y', 'duration']),
-                                                            data['y'], test_size=0.2, shuffle=True, random_state=17)
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(self.data.drop(columns=['y', 'duration']),
+                                                            self.data['y'], test_size=0.2, shuffle=True, random_state=17)
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(self.X_train, self.y_train,
                                                                         test_size=0.2, shuffle=True, random_state=17)
 
@@ -126,18 +141,18 @@ class BankMarketingModel:
 
         if self.full:
             self.column_transformer = ColumnTransformer([
-                ('ohe', cat_pipe, categorical_cols),
-                ('scale', MinMaxScaler(), num_cols),
-                ('log', log_pipe, log_cols),
+                ('ohe', cat_pipe, self.categorical_cols),
+                ('scale', IdentityTransformer(),self.num_cols), #MinMaxScaler()
+                ('log', log_pipe, self.log_cols),
             ],
                 remainder='passthrough', verbose=0
             )
         else:
             self.column_transformer = ColumnTransformer([
-                ('ohe', cat_pipe, categorical_cols_excl),
-                ('scale', MinMaxScaler(), num_cols_excl),
-                ('log', log_pipe, log_cols_excl),
-                ('dropper', 'drop', current_campaign_cols),
+                ('ohe', cat_pipe, self.categorical_cols),
+                ('scale', IdentityTransformer(), self.num_cols), #MinMaxScaler()
+                ('log', log_pipe, self.log_cols),
+                ('dropper', 'drop', self.current_campaign_cols),
             ],
                 remainder='passthrough', verbose=0
             )

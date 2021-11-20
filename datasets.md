@@ -26,4 +26,4 @@
 - nr.employed: number of employees — quarterly indicator (numeric)
 
 ###### Output variable (desired target):
-- y: has the client subscribed a term deposit? (binary: 'yes','no')
+- y:     has the client subscribed a term deposit? (binary: 'yes','no')
