@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split, GridSearchCV
 from lightgbm import LGBMClassifier
 from sklearn.metrics import roc_auc_score, confusion_matrix, recall_score, precision_score
-from sklearn.impute import SimpleImputer, KNNImputer
+from sklearn.impute import SimpleImputer
 
 # TODO switch to yaml config
 
@@ -58,12 +58,11 @@ class CaseCI:
 
 
     def get_names(self):
-        self.names = self.X_train.columns
+        self.names = list(self.X_train.columns)
 
     def train_model(self) -> None:
 
         self.data = self.load_data()
-        self.data.fillna(-1, inplace=True)
 
         self.X_train = self.data.loc[self.data['train_flag'] == 1, :].drop(columns=['target','train_flag'])
         self.y_train = self.data.loc[self.data['train_flag'] == 1, 'target'].drop(columns=['train_flag'])
@@ -72,9 +71,15 @@ class CaseCI:
         self.y_test = self.data.loc[self.data['train_flag'] == 0, 'target'].drop(columns=['train_flag'])
 
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(self.X_train, self.y_train,
-                                                                        test_size=0.2, shuffle=True, random_state=17)
+                                            test_size=0.2, shuffle=True, random_state=17)
 
         self.get_names()
+
+        self.imp_mean = SimpleImputer(missing_values=np.nan, strategy='mean')
+        self.imp_mean.fit(self.X_train)
+        self.X_train = pd.DataFrame(self.imp_mean.transform(self.X_train), columns=self.names)
+        self.X_val = pd.DataFrame(self.imp_mean.transform(self.X_val), columns=self.names)
+        self.X_test = pd.DataFrame(self.imp_mean.transform(self.X_test), columns=self.names)
 
         self.grid_pipe_lgbm = GridSearchCV(LGBMClassifier(), lgbm_params, cv=5, scoring='f1', verbose=1, n_jobs=1)
         self.grid_pipe_lgbm.fit(self.X_train, self.y_train)
