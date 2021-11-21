@@ -107,6 +107,12 @@ class CaseCI:
         print("Precision test : ", precision_score(self.y_test, pipe.predict(self.X_test)))
         print("Recall test : ", recall_score(self.y_test, pipe.predict(self.X_test)))
 
+        confusion_matrix = pd.crosstab(self.y_test, pipe.predict(self.X_test),
+                                       rownames=['Actual'], colnames=['Predicted'])
+        sns.heatmap(confusion_matrix, annot=True)
+        plt.show()
+        # print(confusion_matrix(self.y_test, pipe.predict(self.X_test)))
+
     def save_pipe(self, n, name):
         addstr = 'full' if self.full else 'reduced'
         with open(f'../models/pipe_{addstr}_{name}_{n}.pkl', 'wb') as f:

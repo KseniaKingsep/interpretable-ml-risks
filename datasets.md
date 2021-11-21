@@ -27,3 +27,15 @@
 
 ###### Output variable (desired target):
 - y:     has the client subscribed a term deposit? (binary: 'yes','no')
+
+
+## Case Dataset
+- target - if the deal will not be closed. 
+- train_flag - data used for training (probably earlier in time)
+
+###### Changeable features: 
+- F_5: Number of deals closed with the organization till this day
+- F_12: % of calls among all activities durin the last 3 days
+- F_24: Average number of unique products offered during the last 3 days
+- F_18: NUmber of products offered to clients for the last 3 days
+- F_15, F_72: Average number of meetings and calls during the last 3 days

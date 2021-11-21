@@ -164,7 +164,7 @@ class BankMarketingModel:
         self.X_val_enc = pd.DataFrame(self.column_transformer.transform(self.X_val), columns=self.names)
         self.X_test_enc = pd.DataFrame(self.column_transformer.transform(self.X_test),  columns=self.names)
 
-        self.grid_pipe_lgbm = GridSearchCV(LGBMClassifier(), lgbm_params, cv=5, scoring='roc_auc', verbose=1, n_jobs=5)
+        self.grid_pipe_lgbm = GridSearchCV(LGBMClassifier(), lgbm_params, cv=5, scoring='f1', verbose=1, n_jobs=5)
         self.grid_pipe_lgbm.fit(self.X_train_enc, self.y_train)
 
     def get_fimp(self, n: int = 20) -> None:
@@ -177,19 +177,23 @@ class BankMarketingModel:
         plt.figure(figsize=(10, 6))
         sns.barplot(df_feature_importance.head(n).importance,
                     df_feature_importance.head(n).index, palette='mako');
-        # plt.savefig('lgbm_importances-01.png')
 
     def print_metrics(self) -> None:
 
         pipe = self.grid_pipe_lgbm
         print(
-        "ROC AUC train : ", roc_auc_score(self.y_train, pipe.predict(self.X_train_enc)), '\n',
+        " ROC AUC train : ", roc_auc_score(self.y_train, pipe.predict(self.X_train_enc)), '\n',
         "ROC AUC val : ", roc_auc_score(self.y_val, pipe.predict(self.X_val_enc)), '\n',
         "ROC AUC test : ", roc_auc_score(self.y_test, pipe.predict(self.X_test_enc)), '\n'
         )
 
         print("Precision test : ", precision_score(self.y_test, pipe.predict(self.X_test_enc)))
         print("Recall test : ", recall_score(self.y_test, pipe.predict(self.X_test_enc)))
+
+        confusion_matrix = pd.crosstab(self.y_test, pipe.predict(self.X_test_enc),
+                                       rownames=['Actual'], colnames=['Predicted'])
+        sns.heatmap(confusion_matrix, annot=True)
+        plt.show()
 
     def save_pipe(self, n):
         addstr = 'full' if self.full else 'reduced'
