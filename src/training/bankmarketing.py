@@ -12,6 +12,7 @@ from lightgbm import LGBMClassifier
 from sklearn.pipeline import make_pipeline, Pipeline
 from sklearn.metrics import roc_auc_score, confusion_matrix, recall_score, precision_score
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.impute import SimpleImputer, KNNImputer
 
 # TODO switch to yaml config
 ord_edu = ['illiterate', 'basic.4y', 'basic.6y', 'basic.9y', 'unknown', 'high.school',
@@ -125,7 +126,7 @@ class BankMarketingModel:
                     .named_steps['onehotencoder'].get_feature_names_out(self.categorical_cols)) \
                     + self.num_cols + self.log_cols + self.other_cols
 
-    def train_bank_model(self) -> None:
+    def train_model(self) -> None:
 
         self.data = self.load_data()
         self.data = self.preprocess(self.data)
