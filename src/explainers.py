@@ -2,7 +2,7 @@ from sklearn.metrics import recall_score, precision_score
 from sklearn.inspection import PartialDependenceDisplay
 import matplotlib.pyplot as plt
 from src.timelimit import *
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 import datetime
 import dice_ml
 import random
@@ -36,6 +36,7 @@ class DiCeReport:
 
     def __init__(self, model, desired_class):
 
+        self.c = 0
         self.model = model
         self.desired_class = desired_class
         self.instances_to_change = [i for i, x in
@@ -54,6 +55,8 @@ class DiCeReport:
 
     def explain(self, instance_id=None, n_cf=5, features_to_vary=None, print=True):
 
+        self.res = None
+
         if features_to_vary is None:
             features_to_vary = self.model.names
 
@@ -67,13 +70,13 @@ class DiCeReport:
                                                    desired_class="opposite", verbose=False,
                                                    features_to_vary=features_to_vary
                                                    )
-        except TimeoutException as e:
-            print("Timed out!")
-            print(f"""Problem for item {row}""")
-            pass
 
-        if print:
-            self.res.visualize_as_dataframe(show_only_changes=True)
+                if print and self.res:
+                    self.res.visualize_as_dataframe(show_only_changes=True)
+
+        except TimeoutException as e:
+            self.c += 1
+            pass
 
     def evaluate_dataset(self, features_to_vary=None, n=None, save=True, name=''):
 
@@ -83,16 +86,15 @@ class DiCeReport:
                 n = int(len(self.model.X_test) * n)
             subset = random.sample(self.instances_to_change, n)
 
-        c = 0
+        self.c = 0
         self.cfs = {}
         for row in tqdm(subset):
             self.explain(instance_id=row, n_cf=5, features_to_vary=features_to_vary, print=False)
 
-            if self.res.cf_examples_list[0].final_cfs_df is not None:
-                print(f""" Found CF for {len(cfs) + 1} rows""")
-                self.cfs[row] = self.res.cf_examples_list[0].final_cfs_df.to_dict('records')
-
-            c += 1
+            if self.res:
+                if self.res.cf_examples_list[0].final_cfs_df is not None:
+                    print(f""" Found CF for {len(self.cfs) + 1} rows""")
+                    self.cfs[row] = self.res.cf_examples_list[0].final_cfs_df.to_dict('records')
 
         if save:
             if name == '':
@@ -100,12 +102,13 @@ class DiCeReport:
             with open(f'../results/{name}.pkl', 'wb') as f:
                 pickle.dump(self.cfs, f, pickle.HIGHEST_PROTOCOL)
 
-
-        print(f"""% of successfull explanations {len(self.cfs)/len(subset)}""")
+        print(f"""{len(subset)} instances analyzed""")
+        print(f"""{len(self.cfs)/len(subset)}% of successfull explanations""")
+        print(f"""{self.c / len(subset)}% of programming package errors""")
+        print(f"""{(len(subset)-self.c-len(self.cfs)) / len(subset)}% of cases, where no CFs could be found by DiCE""")
         self.additional_good_class = self.get_additional_conversion()
-        print(f"""Additional good class via CFs: {self.additional_good_class}, precision {precision_score(self.model.y_val, 
-                                                       self.model.grid_pipe_lgbm.predict(self.model.X_val))}""")
-        print(f"""% of additional successes {len(self.additional_good_class) / len(subset)}""")
+        print(f"""{self.additional_good_class} additional good class instances obtained""")
+        print(f"""{self.additional_good_class / len(subset)}% of additional successes (model quality adjusted)""")
 
 
     def analyze_counterfactuals(self):
@@ -121,14 +124,9 @@ class DiCeReport:
         See how many instances of not desired class will be converted to desired
         :return:
         """
-        pr = precision_score(self.model.y_val,
-                             self.model.grid_pipe_lgbm.predict(self.model.X_val))
-        additional_conversion = 0
-
-        for i in self.cfs.keys():
-            if self.model.y_test.values[i] != self.desired_class:
-                additional_conversion += 1
-        return additional_conversion * pr
+        pr = precision_score(self.model.y_val, self.model.grid_pipe_lgbm.predict(self.model.X_val))
+        inverse_pr = precision_score(1-self.model.y_val, 1-self.model.grid_pipe_lgbm.predict(self.model.X_val))
+        return len(self.cfs) * inverse_pr * pr
 
     def global_explainers(self):
         """
