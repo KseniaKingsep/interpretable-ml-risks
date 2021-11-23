@@ -99,7 +99,7 @@ class CaseCI:
 
         pipe = self.grid_pipe_lgbm
         print(
-        "ROC AUC train : ", roc_auc_score(self.y_train, pipe.predict(self.X_train)), '\n',
+        " ROC AUC train : ", roc_auc_score(self.y_train, pipe.predict(self.X_train)), '\n',
         "ROC AUC val : ", roc_auc_score(self.y_val, pipe.predict(self.X_val)), '\n',
         "ROC AUC test : ", roc_auc_score(self.y_test, pipe.predict(self.X_test)), '\n'
         )
@@ -109,7 +109,7 @@ class CaseCI:
 
         confusion_matrix = pd.crosstab(self.y_test, pipe.predict(self.X_test),
                                        rownames=['Actual'], colnames=['Predicted'])
-        sns.heatmap(confusion_matrix, annot=True)
+        sns.heatmap(confusion_matrix, annot=True, fmt='.1f')
         plt.show()
         # print(confusion_matrix(self.y_test, pipe.predict(self.X_test)))
 

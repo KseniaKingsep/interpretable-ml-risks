@@ -1,6 +1,11 @@
 from sklearn.inspection import PartialDependenceDisplay
 import matplotlib.pyplot as plt
-
+from src.timelimit import *
+from tqdm import tqdm
+import datetime
+import dice_ml
+import random
+import pickle
 
 # TODO add other explainers from notebook
 def plot_pdp_ice(model, X_train, features, title_fill):
@@ -25,4 +30,74 @@ def plot_pdp_ice(model, X_train, features, title_fill):
     )
     display.figure_.subplots_adjust(wspace=0.2, hspace=0.4)
 
+
+class DiCeReport:
+
+    def __init__(self, model, desired_class):
+
+        self.model = model
+        self.instances_to_change = [i for i, x in
+                   enumerate((model.grid_pipe_lgbm.predict(model.X_test) == desired_class))
+                   if x]
+
+    def create_explainer(self):
+
+        X_dice = self.model.X_train.copy()
+        X_dice['target'] = self.model.y_train
+        d = dice_ml.Data(dataframe=X_dice,
+                         continuous_features=self.model.names,
+                         outcome_name='target')
+        m = dice_ml.Model(model=self.model.grid_pipe_lgbm, backend='sklearn')
+        self.exp = dice_ml.Dice(d, m)
+
+    def explain(self, instance_id=None, n_cf=5, features_to_vary=None, print=True):
+
+        if features_to_vary is None:
+            features_to_vary = self.model.names
+
+        if instance_id is None:
+            instance_id = random.choice(self.instances_to_change)
+        query_instance = self.model.X_test.iloc[[instance_id]]
+
+        try:
+            with time_limit(5):
+                self.res = self.exp.generate_counterfactuals(query_instance, total_CFs=n_cf,
+                                                   desired_class="opposite", verbose=False,
+                                                   features_to_vary=features_to_vary
+                                                   )
+        except TimeoutException as e:
+            print("Timed out!")
+            print(f"""Problem for item {row}""")
+            pass
+
+        if print:
+            self.res.visualize_as_dataframe(show_only_changes=True)
+
+    def evaluate_dataset(self, features_to_vary=None, n=None, save=True, name=''):
+
+        subset = self.instances_to_change
+        if n is not None:
+            if n < 0:
+                n = int(len(self.model.X_test) * n)
+            subset = random.sample(self.instances_to_change, n)
+
+        c = 0
+        self.cfs = {}
+        for row in tqdm(subset):
+            self.explain(instance_id=row, n_cf=5, features_to_vary=features_to_vary, print=False)
+
+            if self.res.cf_examples_list[0].final_cfs_df is not None:
+                print(f""" Found CF for {len(cfs) + 1} rows""")
+                self.cfs[row] = self.res.cf_examples_list[0].final_cfs_df.to_dict('records')
+
+            c += 1
+
+        if save:
+            if name == '':
+                name = f'test_{datetime.datetime.now()}'
+                with open(f'../results/{name}.pkl', 'wb') as f:
+                    pickle.dump(self.cfs, f, pickle.HIGHEST_PROTOCOL)
+
+
+        print(f"""% of successfull explanations {len(self.cfs)/len(subset)}""")
 

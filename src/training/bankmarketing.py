@@ -192,7 +192,7 @@ class BankMarketingModel:
 
         confusion_matrix = pd.crosstab(self.y_test, pipe.predict(self.X_test_enc),
                                        rownames=['Actual'], colnames=['Predicted'])
-        sns.heatmap(confusion_matrix, annot=True)
+        sns.heatmap(confusion_matrix, annot=True, fmt='.1f')
         plt.show()
 
     def save_pipe(self, n):
