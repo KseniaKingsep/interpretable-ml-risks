@@ -1,3 +1,4 @@
+from sklearn.metrics import recall_score, precision_score
 from sklearn.inspection import PartialDependenceDisplay
 import matplotlib.pyplot as plt
 from src.timelimit import *
@@ -36,6 +37,7 @@ class DiCeReport:
     def __init__(self, model, desired_class):
 
         self.model = model
+        self.desired_class = desired_class
         self.instances_to_change = [i for i, x in
                    enumerate((model.grid_pipe_lgbm.predict(model.X_test) == desired_class))
                    if x]
@@ -95,9 +97,49 @@ class DiCeReport:
         if save:
             if name == '':
                 name = f'test_{datetime.datetime.now()}'
-                with open(f'../results/{name}.pkl', 'wb') as f:
-                    pickle.dump(self.cfs, f, pickle.HIGHEST_PROTOCOL)
+            with open(f'../results/{name}.pkl', 'wb') as f:
+                pickle.dump(self.cfs, f, pickle.HIGHEST_PROTOCOL)
 
 
         print(f"""% of successfull explanations {len(self.cfs)/len(subset)}""")
+        self.additional_good_class = self.get_additional_conversion()
+        print(f"""Additional good class via CFs: {self.additional_good_class}, precision {precision_score(self.model.y_val, 
+                                                       self.model.grid_pipe_lgbm.predict(self.model.X_val))}""")
+        print(f"""% of additional successes {len(self.additional_good_class) / len(subset)}""")
 
+
+    def analyze_counterfactuals(self):
+        """
+
+        :return:
+        """
+        pass
+
+
+    def get_additional_conversion(self):
+        """
+        See how many instances of not desired class will be converted to desired
+        :return:
+        """
+        pr = precision_score(self.model.y_val,
+                             self.model.grid_pipe_lgbm.predict(self.model.X_val))
+        additional_conversion = 0
+
+        for i in self.cfs.keys():
+            if self.model.y_test.values[i] != self.desired_class:
+                additional_conversion += 1
+        return additional_conversion * pr
+
+    def global_explainers(self):
+        """
+        Compare the result
+        :return:
+        """
+        pass
+
+    def local_explainers(self):
+        """
+
+        :return:
+        """
+        pass
