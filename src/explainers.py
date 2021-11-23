@@ -8,6 +8,10 @@ import dice_ml
 import random
 import pickle
 
+import logging
+logger = logging.getLogger()
+logger.setLevel(logging.CRITICAL)
+
 # TODO add other explainers from notebook
 def plot_pdp_ice(model, X_train, features, title_fill):
     fig, ax = plt.subplots(figsize=(10, 10))
@@ -53,7 +57,7 @@ class DiCeReport:
         m = dice_ml.Model(model=self.model.grid_pipe_lgbm, backend='sklearn')
         self.exp = dice_ml.Dice(d, m)
 
-    def explain(self, instance_id=None, n_cf=5, features_to_vary=None, print=True):
+    def get_cf(self, instance_id=None, n_cf=5, features_to_vary=None, print=True):
 
         self.res = None
 
@@ -80,7 +84,7 @@ class DiCeReport:
 
     def evaluate_dataset(self, features_to_vary=None, n=None, save=True, name=''):
 
-        subset = self.instances_to_change
+        self.subset = self.instances_to_change
         if n is not None:
             if n < 0:
                 n = int(len(self.model.X_test) * n)
@@ -88,8 +92,8 @@ class DiCeReport:
 
         self.c = 0
         self.cfs = {}
-        for row in tqdm(subset):
-            self.explain(instance_id=row, n_cf=5, features_to_vary=features_to_vary, print=False)
+        for row in tqdm(self.subset):
+            self.get_cf(instance_id=row, n_cf=5, features_to_vary=features_to_vary, print=False)
 
             if self.res:
                 if self.res.cf_examples_list[0].final_cfs_df is not None:
@@ -102,18 +106,26 @@ class DiCeReport:
             with open(f'../results/{name}.pkl', 'wb') as f:
                 pickle.dump(self.cfs, f, pickle.HIGHEST_PROTOCOL)
 
-        print(f"""{len(subset)} instances analyzed""")
-        print(f"""{len(self.cfs)/len(subset)}% of successfull explanations""")
-        print(f"""{self.c / len(subset)}% of programming package errors""")
-        print(f"""{(len(subset)-self.c-len(self.cfs)) / len(subset)}% of cases, where no CFs could be found by DiCE""")
-        self.additional_good_class = self.get_additional_conversion()
-        print(f"""{self.additional_good_class} additional good class instances obtained""")
-        print(f"""{self.additional_good_class / len(subset)}% of additional successes (model quality adjusted)""")
+        self.print_metrics()
 
+    def print_metrics(self):
+        """
+        Print out key values
+        :return:
+        """
+        print(f"""{len(self.subset)} instances analyzed""")
+        print(f"""{len(self.cfs) / len(self.subset)}% of successfull explanations""")
+        print(f"""{self.c / len(self.subset)}% of programming package errors""")
+        print(
+            f"""{(len(self.subset) - self.c - len(self.cfs)) / len(self.subset)}% of cases, where no CFs could be found by DiCE""")
+        self.additional_good_class = self.get_additional_conversion()
+        print(f"""{int(self.additional_good_class)} additional good class instances obtained""")
+        print(
+            f"""{round(self.additional_good_class / len(self.subset), 2)}% of additional successes (model quality adjusted)""")
 
     def analyze_counterfactuals(self):
         """
-
+        See how the changes in data affect the target
         :return:
         """
         pass
