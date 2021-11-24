@@ -40,7 +40,13 @@ class DiCeReport:
 
     def __init__(self, model, desired_class):
 
+        """
+        :param model: model training class (trained) like CaseCI or BankMarketingModel
+        :param desired_class: a good class, that we want to obtain for max number of instances
+        """
+
         self.c = 0
+        self.cfs = {}
         self.model = model
         self.desired_class = desired_class
         self.instances_to_change = [i for i, x in
@@ -48,6 +54,11 @@ class DiCeReport:
                    if x]
 
     def create_explainer(self):
+
+        """
+        Initialize explainer
+        :return:
+        """
 
         X_dice = self.model.X_train.copy()
         X_dice['target'] = self.model.y_train
@@ -57,7 +68,16 @@ class DiCeReport:
         m = dice_ml.Model(model=self.model.grid_pipe_lgbm, backend='sklearn')
         self.exp = dice_ml.Dice(d, m)
 
-    def get_cf(self, instance_id=None, n_cf=5, features_to_vary=None, print=True):
+    def get_cf(self, instance_id=None, n_cf=5, features_to_vary=None, timeout=5):
+
+        """
+        Get counterfactuals for one instance
+        :param instance_id: location in the test dataset in model
+        :param n_cf: how many CGs to generate
+        :param features_to_vary: changeable features
+        :param timeout: time to try CFs generation
+        :return:
+        """
 
         self.res = None
 
@@ -69,7 +89,7 @@ class DiCeReport:
         query_instance = self.model.X_test.iloc[[instance_id]]
 
         try:
-            with time_limit(5):
+            with time_limit(timeout):
                 self.res = self.exp.generate_counterfactuals(query_instance, total_CFs=n_cf,
                                                    desired_class="opposite", verbose=False,
                                                    features_to_vary=features_to_vary
@@ -82,18 +102,28 @@ class DiCeReport:
             self.c += 1
             pass
 
-    def evaluate_dataset(self, features_to_vary=None, n=None, save=True, name=''):
+    def evaluate_dataset(self, features_to_vary=None, n=None, save=True, name='', timeout=5):
+
+        """
+
+        :param features_to_vary: changeable features
+        :param n: number of instances to sample of fraction of the dataset (if < 0)
+        :param save: save dictionary with the CFs
+        :param name: name for the saving
+        :param timeout:  time to try CFs generation
+        :return:
+        """
 
         self.subset = self.instances_to_change
         if n is not None:
             if n < 0:
                 n = int(len(self.model.X_test) * n)
-            subset = random.sample(self.instances_to_change, n)
+            self.subset = random.sample(self.instances_to_change, n)
 
         self.c = 0
         self.cfs = {}
         for row in tqdm(self.subset):
-            self.get_cf(instance_id=row, n_cf=5, features_to_vary=features_to_vary, print=False)
+            self.get_cf(instance_id=row, n_cf=5, features_to_vary=features_to_vary, print=False, timeout=timeout)
 
             if self.res:
                 if self.res.cf_examples_list[0].final_cfs_df is not None:
@@ -106,22 +136,17 @@ class DiCeReport:
             with open(f'../results/{name}.pkl', 'wb') as f:
                 pickle.dump(self.cfs, f, pickle.HIGHEST_PROTOCOL)
 
-        self.print_metrics()
-
     def print_metrics(self):
         """
         Print out key values
         :return:
         """
         print(f"""{len(self.subset)} instances analyzed""")
-        print(f"""{len(self.cfs) / len(self.subset)}% of successfull explanations""")
-        print(f"""{self.c / len(self.subset)}% of programming package errors""")
-        print(
-            f"""{(len(self.subset) - self.c - len(self.cfs)) / len(self.subset)}% of cases, where no CFs could be found by DiCE""")
+        print(f"""{len(self.cfs)*100 / len(self.subset)}% of successfull explanations""")
+        print(f"""{self.c*100 / len(self.subset)}% of programming package errors""")
+        print(f"""{(len(self.subset) - self.c - len(self.cfs))*100 / len(self.subset)}% of cases, where no CFs could be found by DiCE""")
         self.additional_good_class = self.get_additional_conversion()
-        print(f"""{int(self.additional_good_class)} additional good class instances obtained""")
-        print(
-            f"""{round(self.additional_good_class / len(self.subset), 2)}% of additional successes (model quality adjusted)""")
+        print(f"""{round(int(self.additional_good_class)*100 / len(self.subset), 2)}% of additional successes (model quality adjusted)""")
 
     def analyze_counterfactuals(self):
         """
@@ -142,7 +167,7 @@ class DiCeReport:
 
     def global_explainers(self):
         """
-        Compare the result
+
         :return:
         """
         pass
