@@ -3,6 +3,8 @@ from sklearn.inspection import PartialDependenceDisplay
 import matplotlib.pyplot as plt
 from src.timelimit import *
 from tqdm.notebook import tqdm
+import seaborn as sns
+import pandas as pd
 import datetime
 import dice_ml
 import random
@@ -53,7 +55,7 @@ class DiCeReport:
                    enumerate((model.grid_pipe_lgbm.predict(model.X_test) == desired_class))
                    if x]
 
-    def create_explainer(self):
+    def create_explainer(self, method='random'):
 
         """
         Initialize explainer
@@ -66,9 +68,10 @@ class DiCeReport:
                          continuous_features=self.model.names,
                          outcome_name='target')
         m = dice_ml.Model(model=self.model.grid_pipe_lgbm, backend='sklearn')
-        self.exp = dice_ml.Dice(d, m)
+        self.exp = dice_ml.Dice(d, m, method)
 
-    def get_cf(self, instance_id=None, n_cf=5, features_to_vary=None, timeout=5):
+    def get_cf(self, instance_id=None, n_cf=5, features_to_vary=None,
+               timeout=5, printout=False):
 
         """
         Get counterfactuals for one instance
@@ -95,14 +98,15 @@ class DiCeReport:
                                                    features_to_vary=features_to_vary
                                                    )
 
-                if print and self.res:
+                if printout and self.res:
                     self.res.visualize_as_dataframe(show_only_changes=True)
 
         except TimeoutException as e:
             self.c += 1
             pass
 
-    def evaluate_dataset(self, features_to_vary=None, n=None, save=True, name='', timeout=5):
+    def evaluate_dataset(self, features_to_vary=None, n=None, save=True, name='',
+                         timeout=5, printout=False):
 
         """
 
@@ -123,13 +127,17 @@ class DiCeReport:
         self.c = 0
         self.cfs = {}
         for row in tqdm(self.subset):
-            self.get_cf(instance_id=row, n_cf=5, features_to_vary=features_to_vary, print=False, timeout=timeout)
+            self.get_cf(instance_id=row, n_cf=5, features_to_vary=features_to_vary,
+                        timeout=timeout, printout=printout)
 
             if self.res:
                 if self.res.cf_examples_list[0].final_cfs_df is not None:
+                    # self.cfs[row] = self.res.cf_examples_list[0].final_cfs_df.to_dict('records')
+                    self.cfs[row] = {
+                                     'original': self.res.cf_examples_list[0].test_instance_df.iloc[0],
+                                     'cfs': self.res.cf_examples_list[0].final_cfs_df
+                                     }
                     print(f""" Found CF for {len(self.cfs) + 1} rows""")
-                    self.cfs[row] = self.res.cf_examples_list[0].final_cfs_df.to_dict('records')
-
         if save:
             if name == '':
                 name = f'test_{datetime.datetime.now()}'
@@ -148,13 +156,32 @@ class DiCeReport:
         self.additional_good_class = self.get_additional_conversion()
         print(f"""{round(int(self.additional_good_class)*100 / len(self.subset), 2)}% of additional successes (model quality adjusted)""")
 
-    def analyze_counterfactuals(self):
+    def preprocess_cf(self, row, res):
         """
         See how the changes in data affect the target
         :return:
         """
-        pass
+        cfdf = res['cfs']
+        df = res['original']
+        diffs = cfdf[(cfdf-df).ne(0)].drop(columns='target')
+        diffs['instance_id'] = row
+        return diffs
 
+    def combine_all_cf_diffs(self):
+
+        dfs = []
+        for row, res in self.cfs.items():
+            dfs.append(self.preprocess_cf(row,res))
+        self.alldiffs = pd.concat(dfs, axis=0)
+        self.alldiffs = self.alldiffs.dropna(axis=1, how='all')
+
+    def plot_diffs(self, bins=30, size=(15,10)):
+
+        self.combine_all_cf_diffs()
+
+        sns.stripplot(data=self.alldiffs.drop(columns='instance_id'),
+                      jitter=True, alpha=0.7, marker="h", size=10)
+        plt.title('Changes to variables to obtain counterfactuals')
 
     def get_additional_conversion(self):
         """
