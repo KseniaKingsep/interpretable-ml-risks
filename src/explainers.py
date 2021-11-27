@@ -311,5 +311,19 @@ class Comparator:
     def compare_dice_lime(self, features_to_vary):
         self.lime.create_explainer()
         self.lime.evaluate_dataset(cfs=self.dice.cfs, features_to_vary=features_to_vary)
-        self.df = self.dice.alldiffs.merge(self.lime.aggbyidfeat, how='left', on='instance_id')
+
+        tmp = self.lime.aggbyidfeat.drop(columns=['std']).reset_index()
+        self.tmp = tmp.pivot_table(index='instance_id', columns='feature', values='mean').reset_index()
+
+        self.wide = self.dice.alldiffs.merge(self.tmp, how='left', on='instance_id',
+                        suffixes=['_dice', '_lime'])
+
+        long_dice = pd.melt(self.dice.alldiffs.reset_index(),
+                            id_vars=['instance_id', 'index'],
+                            value_vars=features_to_vary,
+                            var_name='feature', value_name='dice_diff')
+
+        self.long = long_dice.merge(self.lime.aggbyidfeat.drop(columns=['std']),
+                        how='left', on=['instance_id','feature'])\
+            .dropna(how='any', axis=0).sort_values(['instance_id', 'index'])
 
