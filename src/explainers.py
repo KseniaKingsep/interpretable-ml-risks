@@ -1,6 +1,7 @@
 from sklearn.metrics import recall_score, precision_score
 from sklearn.inspection import PartialDependenceDisplay
 from lime.lime_tabular import LimeTabularExplainer
+from slime.lime_tabular import LimeTabularExplainer as sLimeTabularExplainer
 import matplotlib.pyplot as plt
 from src.timelimit import *
 from tqdm.notebook import tqdm
@@ -205,9 +206,10 @@ class DiCeReport:
 
 class LimeReport:
 
-    def __init__(self, model, desired_class):
+    def __init__(self, model, desired_class, slime=True):
 
         self.model = model
+        self.slime = slime
         self.desired_class = desired_class
         self.instances_to_change = [i for i, x in
                                     enumerate((model.grid_pipe_lgbm.predict(model.X_test) == desired_class))
@@ -218,9 +220,19 @@ class LimeReport:
         Just initialize LimeTabularExplainer
         :return:
         """
-        self.exp = LimeTabularExplainer(self.model.X_train.values, mode='classification',
+        if self.slime:
+            self.exp = sLimeTabularExplainer(self.model.X_train.values,
+                                       mode='classification',
+                                       feature_names=self.model.X_train.columns,
+                                       discretize_continuous=False,
+                                       feature_selection='lasso_path',
+                                       sample_around_instance=True)
+        else:
+            self.exp = LimeTabularExplainer(self.model.X_train.values,
+                                        mode='classification',
                                         feature_names=self.model.X_train.columns,
                                         discretize_continuous=False)
+
 
     def get_exp(self, instance_id=None, features_to_vary=None, printout=False):
         """
@@ -231,7 +243,13 @@ class LimeReport:
         """
         if instance_id is None:
             instance_id = random.choice(self.instances_to_change)
-        self.one_exp = self.exp.explain_instance(self.model.X_test.iloc[instance_id],
+        if self.slime:
+            self.one_exp = self.exp.slime(self.model.X_test.iloc[instance_id].values,
+                                self.model.grid_pipe_lgbm.predict_proba,
+                                num_features=len(self.model.X_train.columns), num_samples=1000,
+                                n_max=10000, alpha=0.05)
+        else:
+            self.one_exp = self.exp.explain_instance(self.model.X_test.iloc[instance_id],
                                                  self.model.grid_pipe_lgbm.predict_proba,
                                                  num_features=len(self.model.X_train.columns))
 
@@ -239,10 +257,10 @@ class LimeReport:
             features_to_vary = self.model.names
         self.lime_pred = pd.DataFrame([t for t in self.one_exp.as_list()
                                        if any(f == t[0] for f in features_to_vary)],
-                                      columns=['feature', 'coef'])
+                                      columns=['feature', 'lime_coef'])
         self.lime_pred['instance_id'] = instance_id
         if self.desired_class == 0:
-            self.lime_pred['coef'] = -self.lime_pred['coef']
+            self.lime_pred['lime_coef'] = -self.lime_pred['lime_coef']
 
         if printout:
             self.one_exp.show_in_notebook(show_table=True, show_all=False)
@@ -264,13 +282,21 @@ class LimeReport:
 
         self.limeexps = []
         for row in tqdm(self.subset):
-            for i in range(n_exps):
+            if self.slime:
                 self.get_exp(instance_id=row, features_to_vary=features_to_vary)
                 self.limeexps.append(self.lime_pred)
-        self.allcoefs = pd.concat(self.limeexps, axis=0).sort_values(by=['instance_id', 'feature'])
-        self.aggbyidfeat = self.allcoefs.groupby(['instance_id', 'feature']).agg([np.std, np.mean])
-        self.aggbyidfeat.columns = self.aggbyidfeat.columns.droplevel(0)
-        self.aggbyidfeat = self.aggbyidfeat.rename_axis(None, axis=1).reset_index()
+            else:
+                for i in range(n_exps):
+                    self.get_exp(instance_id=row, features_to_vary=features_to_vary)
+                    self.limeexps.append(self.lime_pred)
+        if self.slime:
+            self.allcoefs = pd.concat(self.limeexps, axis=0).sort_values(by=['instance_id', 'feature'])
+            self.aggbyidfeat = self.allcoefs.copy()
+        else:
+            self.allcoefs = pd.concat(self.limeexps, axis=0).sort_values(by=['instance_id', 'feature'])
+            self.aggbyidfeat = self.allcoefs.groupby(['instance_id', 'feature']).agg([np.std, np.mean])
+            self.aggbyidfeat.columns = self.aggbyidfeat.columns.droplevel(0)
+            self.aggbyidfeat = self.aggbyidfeat.rename_axis(None, axis=1).reset_index()
 
         if save:
             if name == '':
@@ -278,20 +304,22 @@ class LimeReport:
             with open(f'../results/lime_{name}.pkl', 'wb') as f:
                 pickle.dump(self.allcoefs, f, pickle.HIGHEST_PROTOCOL)
 
-    def plot_coefs(self):
+    def plot_coefs(self, ymax=None, ymin=None):
 
         plt.figure(figsize=(10, 6))
+        if ymax is not None and ymin is not None:
+            plt.ylim(ymax, ymin)
         if len(self.subset) <= 30:
-            sns.stripplot(data=self.allcoefs, x='feature', y='coef', dodge=True,
+            sns.stripplot(data=self.allcoefs, x='feature', y='lime_coef', dodge=True,
                           jitter=True, alpha=0.5, marker="h", size=5, hue='instance_id')
-            sns.pointplot(x="feature", y="coef", hue="instance_id",
+            sns.pointplot(x="feature", y="lime_coef", hue="instance_id",
                           data=self.allcoefs, dodge=.8 - .8 / 3, join=False,
                           markers="d", scale=0.75, ci=None, alpha=0.5)
         else:
-            sns.pointplot(x="feature", y="coef", hue="instance_id",
+            sns.pointplot(x="feature", y="lime_coef", hue="instance_id",
                           data=self.allcoefs, dodge=.8 - .8 / 3, join=False,
                           scale=0.5, ci=None, alpha=0.5)
-        sns.pointplot(x="feature", y="coef", color='black',
+        sns.pointplot(x="feature", y="lime_coef", color='black',
                       data=self.allcoefs, join=False,
                       markers="d", scale=1, ci='sd', zorder=1000)
 
@@ -326,4 +354,18 @@ class Comparator:
         self.long = long_dice.merge(self.lime.aggbyidfeat.drop(columns=['std']),
                         how='left', on=['instance_id','feature'])\
             .dropna(how='any', axis=0).sort_values(['instance_id', 'index'])
+        self.long['one_sign'] = ~((self.long['dice_diff'] > 0) ^ (self.long['mean'] > 0))
+
+        self.mean_sign_correspondence = self.long.groupby('feature')[['one_sign']].mean().sort_values('one_sign')
+        self.mean_sign_correspondence.columns = ['% of corresponding signs']
+        print('Share of cases where mean LIME coefficient sign corresponds to DiCE suggestion sign:')
+        print(self.mean_sign_correspondence)
+
+    def compare_instance(self, instance_id=None, features_to_vary=None):
+
+        if instance_id is None:
+            instance_id = random.choice(list(self.dice.cfs.keys()))
+
+        self.lime.get_exp(instance_id=instance_id,
+                          features_to_vary=features_to_vary, printout=True)
 
