@@ -15,9 +15,7 @@ import datetime
 import dice_ml
 import random
 import pickle
-import math
 import shap
-
 import logging
 
 logger = logging.getLogger()
@@ -103,17 +101,20 @@ class DiCeReport:
         query_instance = self.model.X_test.iloc[[instance_id]]
 
         # TODO try to reinitialize CFs search several times
-        try:
-            with time_limit(timeout):
-                self.res = self.exp.generate_counterfactuals(query_instance, total_CFs=n_cf,
-                                                             desired_class="opposite", verbose=False,
-                                                             features_to_vary=self.features_to_vary)
-                if printout and self.res:
-                    self.res.visualize_as_dataframe(show_only_changes=True)
+        cnt = 0
+        while (not self.res and cnt<4):
+            cnt += 1
+            try:
+                with time_limit(timeout):
+                    self.res = self.exp.generate_counterfactuals(query_instance, total_CFs=n_cf,
+                                                                 desired_class="opposite", verbose=False,
+                                                                 features_to_vary=self.features_to_vary)
+                    if printout and self.res:
+                        self.res.visualize_as_dataframe(show_only_changes=True)
 
-        except TimeoutException as e:
-            self.c += 1
-            pass
+            except TimeoutException as e:
+                self.c += 1
+                pass
 
     def evaluate_dataset(self, n=None, save=True, name='', timeout=5, printout=False):
 
@@ -130,7 +131,7 @@ class DiCeReport:
 
         self.subset = self.instances_to_change
         if n is not None:
-            if n < 0:
+            if n <=1:
                 n = int(len(self.instances_to_change) * n)
             self.subset = random.sample(self.instances_to_change, n)
 
@@ -192,7 +193,7 @@ class DiCeReport:
         self.combine_all_cf_diffs()
 
         sns.stripplot(data=self.alldiffs.drop(columns='instance_id'),
-                      jitter=True, alpha=0.7, marker="h", size=10)
+                      jitter=True, alpha=0.7, marker="h", size=5)
         plt.title('Changes to variables to obtain counterfactuals')
 
     def get_additional_conversion(self):
@@ -312,7 +313,7 @@ class LimeReport:
         plt.figure(figsize=(10, 6))
         if ymax is not None and ymin is not None:
             plt.ylim(ymax, ymin)
-        if len(self.subset) <= 30:
+        if len(self.subset) <= 30 or not self.slime:
             sns.stripplot(data=self.allcoefs, x='feature', y='lime_coef', dodge=True,
                           jitter=True, alpha=0.5, marker="h", size=5, hue='instance_id')
             sns.pointplot(x="feature", y="lime_coef", hue="instance_id",
@@ -321,7 +322,7 @@ class LimeReport:
         else:
             sns.pointplot(x="feature", y="lime_coef", hue="instance_id",
                           data=self.allcoefs, dodge=.8 - .8 / 3, join=False,
-                          scale=0.5, ci=None, alpha=0.5)
+                          scale=0.5, ci=None, alpha=0.5, marker="d")
         sns.pointplot(x="feature", y="lime_coef", color='black',
                       data=self.allcoefs, join=False,
                       markers="d", scale=1, ci='sd', zorder=1000)
@@ -350,14 +351,44 @@ class ShapReport:
         self.explainer = shap.TreeExplainer(self.model.grid_pipe_lgbm.best_estimator_)
         self.shap_values = self.explainer.shap_values(self.model.X_test)
 
+    def evaluate_dataset(self, cfs=None, save=False, name=''):
+
+        self.shap_values_0 = pd.DataFrame(self.shap_values[0], columns=self.model.names)[self.features_to_vary]
+        self.shap_values_0['instance_id'] = self.shap_values_0.index
+
+        if cfs is not None:
+            self.subset = list(cfs.keys())
+            self.shap_values_0 = self.shap_values_0[self.shap_values_0.instance_id.isin(self.subset)]
+
+        self.shap_long = pd.melt(self.shap_values_0, id_vars=['instance_id'],
+                                 value_vars=self.features_to_vary,
+                                 var_name='feature', value_name='shap_value')
+
+        if save:
+            if name == '':
+                name = f'test_{datetime.datetime.now()}'
+            with open(f'../results/shap_{name}.pkl', 'wb') as f:
+                pickle.dump(self.shap_values_0, f, pickle.HIGHEST_PROTOCOL)
+
+    def plot_coefs(self, ymax=None, ymin=None):
+
+        plt.figure(figsize=(10, 6))
+        if ymax is not None and ymin is not None:
+            plt.ylim(ymax, ymin)
+
+        sns.stripplot(x="feature", y="shap_value", data=self.shap_long, alpha=0.5, jitter=0.3)
+        plt.axhline(0)
+        plt.title('SHAP coefficients for changeable features (colored by instances)')
+        plt.legend([], [], frameon=False)
+
 
 class Comparator:
 
-    def __init__(self, model, desired_class=0, dice=None, shap=None):
+    def __init__(self, model, desired_class=0, dice=None, sh=None):
         self.dice = dice
         self.features_to_vary = [col for col in dice.alldiffs.columns if 'F_' in col]
         self.lime = LimeReport(model, desired_class, slime=True, features_to_vary=self.features_to_vary)
-        self.shap = shap
+        self.sh = sh
         self.model = model
 
     def compare_dice_slime(self):
@@ -386,24 +417,29 @@ class Comparator:
         print('Share of cases where  SLIME coefficient sign is equal to DiCE suggestion sign:')
         print(self.sign_correspondence.round(4) * 100)
 
+    def compare_dice_shap(self):
+
+        self.sh.create_explainer()
+        self.sh.evaluate_dataset(cfs=self.dice.cfs)
+
+        self.long_dice = pd.melt(self.dice.alldiffs.reset_index(),
+                            id_vars=['instance_id', 'index'],
+                            value_vars=self.features_to_vary,
+                            var_name='feature', value_name='dice_diff')
+
+        self.long_sh = self.long_dice.merge(self.sh.shap_long,
+                                how='left', on=['instance_id', 'feature']) \
+                                .dropna(how='any', axis=0).sort_values(['instance_id', 'index'])
+        self.long_sh['one_sign'] = ~((self.long_sh['dice_diff'] > 0) ^ (self.long_sh['shap_value'] > 0))
+
+        self.sign_correspondence_sh = self.long_sh.groupby('feature')[['one_sign']].mean().sort_values('one_sign')
+        self.sign_correspondence_sh.columns = ['% of equal signs']
+        print('Share of cases where SHAP coefficient sign is equal to DiCE suggestion sign:')
+        print(self.sign_correspondence_sh.round(4) * 100)
+
     def compare_instance(self, instance_id=None):
         if instance_id is None:
             instance_id = random.choice(list(self.dice.cfs.keys()))
-
-        # LIME
-        self.lime.get_exp(instance_id=instance_id, printout=False)
-
-        fig = go.Figure(go.Bar(
-            x=self.lime.lime_pred.feature,
-            text=list(self.lime.lime_pred.lime_coef.round(4).astype(str).values),
-            y=list(self.lime.lime_pred.lime_coef.round(4).values),
-        ))
-
-        fig.update_layout(height=400, width=800,
-                          title=f"""SLIME results for instance {instance_id}""",
-                          showlegend=False)
-
-        fig.show()
 
         # DiCE
         original = self.dice.cfs[instance_id]['original'][self.features_to_vary].values
@@ -420,7 +456,7 @@ class Comparator:
             y_rc = [original[c], cfs[c] - original[c], cfs[c]]
             fig.add_trace(
                 go.Waterfall(x=['original', 'difference', 'counterfactual'], y=y_rc,
-                             orientation="v", name=self.features_to_vary[c],
+                             orientation="v", name=changed_features[c],
                              measure=["relative", "relative", "total"],
                              text=[round(val, 3) for val in y_rc],
                              connector={"line": {"color": "rgb(63, 63, 63)"}}),
@@ -431,8 +467,50 @@ class Comparator:
                           showlegend=False)
         fig.show()
 
+        # LIME
+        self.lime.get_exp(instance_id=instance_id, printout=False)
+
+        tmp = self.lime.lime_pred.sort_values('feature').copy()
+
+        fig = go.Figure(go.Bar(
+            x=tmp.feature,
+            text=list(tmp.lime_coef.round(4).astype(str).values),
+            y=list(tmp.lime_coef.round(4).values),
+        ))
+
+        fig.update_layout(height=400, width=800,
+                          title=f"""SLIME results for instance {instance_id}""",
+                          showlegend=False)
+
+        fig.show()
+
+        for feat in changed_features:
+            feat_idx = changed_features.index(feat)
+            dice_sign = (cfs[feat_idx] - original[feat_idx]) > 0
+            lime_sign = list(tmp.lime_coef.round(4).values)[feat_idx] > 0
+            text = 'corresponds' if (dice_sign == lime_sign) else 'doesn\'t correspond'
+
+            print(f"""Stabilized-LIME coefficient sign for {feat} {text} with DiCE suggestion""")
+
         # SHAP
-        # shap.force_plot(self.shap.explainer.expected_value[1],
-        #                 self.shap.shap_values[1][instance_id, :],
-        #                 self.model.X_test.iloc[instance_id, :])
-        # plt.show()
+        tmp = self.sh.shap_long.query('instance_id == @instance_id').sort_values('feature')
+
+        fig = go.Figure(go.Bar(
+            x=self.tmp['feature'],
+            text=list(tmp['shap_value'].round(4).astype(str).values),
+            y=list(tmp['shap_value'].round(4).values),
+        ))
+
+        fig.update_layout(height=500, width=800,
+                          title=f"""SHAP results for instance {instance_id}""",
+                          showlegend=False)
+
+        fig.show()
+
+        for feat in changed_features:
+            feat_idx = changed_features.index(feat)
+            dice_sign = (cfs[feat_idx] - original[feat_idx]) > 0
+            shap_sign = list(tmp.shap_value.round(4).values)[feat_idx] > 0
+            text = 'corresponds' if (dice_sign == shap_sign) else 'doesn\'t correspond'
+
+            print(f"""SHAP coefficient sign for {feat} {text} with DiCE suggestion""")
