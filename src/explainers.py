@@ -49,11 +49,8 @@ def plot_pdp_ice(model, X_train, features, title_fill=None, original=None, cfs=N
             for j, a in enumerate(arr):
                 if a is not None:
                     display.axes_[i][j].axvline(original[i+j+add], color='red', linestyle='--', label='original')
-                    display.axes_[i][j].axvline(cfs[i+j+add], color='green', linestyle='--', label='counerfactual')
-
-                    display.axes_[i][j].axvline(original[i+j+add], color='red', linestyle='--', label='original')
-                    display.axes_[i][j].axvline(cfs[i+j+add], color='green', linestyle='--', label='counerfactual')
-                    # display.axes_[i][j].legend()
+                    display.axes_[i][j].axvline(cfs[i+j+add], color='green', linestyle='--', label='cf')
+                    display.axes_[i][j].legend()
             add = len(display.axes_[i])-1
 
     if title_fill:
