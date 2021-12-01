@@ -23,8 +23,12 @@ logger.setLevel(logging.CRITICAL)
 
 
 # TODO add other explainers from notebook
-def plot_pdp_ice(model, X_train, features, title_fill):
-    fig, ax = plt.subplots(figsize=(10, 10))
+def plot_pdp_ice(model, X_train, features, title_fill=None, original=None, cfs=None):
+
+    if len(features) < 4:
+        fig, ax = plt.subplots(figsize=(10, 5))
+    else:
+        fig, ax = plt.subplots(figsize=(10, 10))
 
     display = PartialDependenceDisplay.from_estimator(
         model,
@@ -39,16 +43,32 @@ def plot_pdp_ice(model, X_train, features, title_fill):
         pd_line_kw={"color": "tab:orange", "linestyle": "--"},
         ax=ax
     )
-    display.figure_.suptitle(
-        f"""Partial dependence of target value on {title_fill[0]}\n"""
-        f"""for the {title_fill[1]} dataset, with {title_fill[2]}"""
-    )
+    if original and cfs:
+        add = 0
+        for i, arr in enumerate(display.axes_):
+            for j, a in enumerate(arr):
+                if a is not None:
+                    display.axes_[i][j].axvline(original[i+j+add], color='red', linestyle='--', label='original')
+                    display.axes_[i][j].axvline(cfs[i+j+add], color='green', linestyle='--', label='counerfactual')
+
+                    display.axes_[i][j].axvline(original[i+j+add], color='red', linestyle='--', label='original')
+                    display.axes_[i][j].axvline(cfs[i+j+add], color='green', linestyle='--', label='counerfactual')
+                    # display.axes_[i][j].legend()
+            add = len(display.axes_[i])-1
+
+    if title_fill:
+        display.figure_.suptitle(
+            f"""Partial dependence of target value on {title_fill[0]}\n"""
+            f"""for the {title_fill[1]} dataset, with {title_fill[2]}"""
+        )
+    else:
+        display.figure_.suptitle(f"""Partial dependence of target value (probability of class 1) (red - original, green - counterfactual)""")
     display.figure_.subplots_adjust(wspace=0.2, hspace=0.4)
 
 
 class DiCeReport:
 
-    def __init__(self, model, desired_class, features_to_vary):
+    def __init__(self, model, desired_class, features_to_vary, custom_range=True):
 
         """
         :param model: model training class (trained) like CaseCI or BankMarketingModel
@@ -65,10 +85,21 @@ class DiCeReport:
             self.features_to_vary = self.model.names
 
         self.instances_to_change = [i for i, x in
-                                    enumerate((model.grid_pipe_lgbm.predict(model.X_test) == desired_class))
+                                    enumerate((model.grid_pipe_lgbm.predict(model.X_test) != desired_class))
                                     if x]
 
-    def create_explainer(self, method='random'):
+        try:
+            self.num_cols = self.model.num_cols
+        except:
+            self.num_cols = self.model.X_train.columns
+
+        self.permitted_range = None
+        if custom_range:
+            self.permitted_range = {}
+            for i, v in self.model.data[self.num_cols].items():
+                self.permitted_range[i] = [v.quantile(0.05), v.quantile(0.95)]
+
+    def create_explainer(self, method='random', cont_feats=None):
 
         """
         Initialize explainer
@@ -77,8 +108,11 @@ class DiCeReport:
 
         X_dice = self.model.X_train.copy()
         X_dice['target'] = self.model.y_train
+
+        if cont_feats is None:
+            cont_feats = self.model.names
         d = dice_ml.Data(dataframe=X_dice,
-                         continuous_features=self.model.names,
+                         continuous_features=cont_feats,
                          outcome_name='target')
         m = dice_ml.Model(model=self.model.grid_pipe_lgbm, backend='sklearn')
         self.exp = dice_ml.Dice(d, m, method)
@@ -100,21 +134,28 @@ class DiCeReport:
             instance_id = random.choice(self.instances_to_change)
         query_instance = self.model.X_test.iloc[[instance_id]]
 
-        # TODO try to reinitialize CFs search several times
-        cnt = 0
-        while (not self.res and cnt<4):
-            cnt += 1
-            try:
-                with time_limit(timeout):
-                    self.res = self.exp.generate_counterfactuals(query_instance, total_CFs=n_cf,
-                                                                 desired_class="opposite", verbose=False,
-                                                                 features_to_vary=self.features_to_vary)
-                    if printout and self.res:
-                        self.res.visualize_as_dataframe(show_only_changes=True)
+        # cnt = 0
+        # print(f"""Start generating cfs for {instance_id}, cnt={cnt}, res={self.res}""")
+        # while not self.res and cnt < 4:
+        #     cnt += 1
+        print(f"""Generating cfs for {instance_id}""")
+        # try:
+        try:
+            with time_limit(timeout):
+                self.res = self.exp.generate_counterfactuals(query_instance, total_CFs=n_cf,
+                                                             desired_class="opposite", verbose=False,
+                                                             features_to_vary=self.features_to_vary,
+                                                             permitted_range=self.permitted_range)
+                if printout and self.res:
+                    self.res.visualize_as_dataframe(show_only_changes=True)
 
-            except TimeoutException as e:
-                self.c += 1
-                pass
+        except TimeoutException as e:
+            self.c += 1
+            pass
+        print(f"""Stopped generating cfs for {instance_id}""")
+            # except ValueError:
+            #     self.c += 1
+            #     pass
 
     def evaluate_dataset(self, n=None, save=True, name='', timeout=5, printout=False):
 
@@ -131,7 +172,7 @@ class DiCeReport:
 
         self.subset = self.instances_to_change
         if n is not None:
-            if n <=1:
+            if n <= 1:
                 n = int(len(self.instances_to_change) * n)
             self.subset = random.sample(self.instances_to_change, n)
 
@@ -147,11 +188,14 @@ class DiCeReport:
                         'cfs': self.res.cf_examples_list[0].final_cfs_df
                     }
                     print(f""" Found CF for {len(self.cfs) + 1} rows""")
+
         if save:
             if name == '':
                 name = f'test_{datetime.datetime.now()}'
             with open(f'../results/dice{name}.pkl', 'wb') as f:
                 pickle.dump(self.cfs, f, pickle.HIGHEST_PROTOCOL)
+
+        self.combine_all_cf_diffs()
 
     def print_metrics(self):
         """
@@ -161,13 +205,25 @@ class DiCeReport:
         print(
             f"""{round(len(self.instances_to_change) * 100 / len(self.model.X_test), 2)}% of instances of undesired class in the dataset""")
         print(f"""{len(self.subset)} instances of undesired class analyzed""")
-        print(f"""{len(self.cfs) * 100 / len(self.subset)}% of successfull explanations""")
-        print(f"""{self.c * 100 / len(self.subset)}% of programming package errors""")
+        print(f"""{round(len(self.cfs) * 100 / len(self.subset), 2)}% of successfull explanations""")
+        print(f"""{round(self.c * 100 / len(self.subset), 2)}% of programming package errors""")
         print(
-            f"""{(len(self.subset) - self.c - len(self.cfs)) * 100 / len(self.subset)}% of cases, where no CFs could be found by DiCE""")
+            f"""{round((len(self.subset) - self.c - len(self.cfs)) * 100 / len(self.subset), 2)}% of cases, where no CFs could be found by DiCE""")
         self.additional_good_class = self.get_additional_conversion()
         print(
             f"""{round(int(self.additional_good_class) * 100 / len(self.subset), 2)}% of additional successes (model quality adjusted)""")
+        print('')
+        self.long_dice = pd.melt(self.alldiffs.reset_index(),
+                                 id_vars=['instance_id', 'index'],
+                                 value_vars=self.alldiffs.columns[:-1], #self.features_to_vary,
+                                 var_name='feature', value_name='dice_diff')
+
+        for n_feats, cnt in (self.long_dice.dropna().groupby(['instance_id', 'index']
+                                                             ).size().value_counts() / (
+                             self.long_dice.dropna().groupby(['instance_id', 'index']).ngroups)
+        ).iteritems():
+            print(f"""In {round(cnt * 100, 2)}% cases {n_feats} features were changes""")
+
 
     def preprocess_cf(self, row, res):
         """
@@ -188,12 +244,15 @@ class DiCeReport:
         self.alldiffs = pd.concat(dfs, axis=0)
         self.alldiffs = self.alldiffs.dropna(axis=1, how='all')
 
-    def plot_diffs(self):
 
-        self.combine_all_cf_diffs()
+    def plot_diffs(self, x=None, y=None):
 
+        if x is not None and y is not None:
+            plt.figure(figsize=(x, y))
+            plt.xticks(rotation=45)
         sns.stripplot(data=self.alldiffs.drop(columns='instance_id'),
                       jitter=True, alpha=0.7, marker="h", size=5)
+        plt.xticks(rotation=45)
         plt.title('Changes to variables to obtain counterfactuals')
 
     def get_additional_conversion(self):
@@ -219,8 +278,8 @@ class LimeReport:
             self.features_to_vary = self.model.names
 
         self.instances_to_change = [i for i, x in
-                                    enumerate((model.grid_pipe_lgbm.predict(model.X_test) == desired_class))
-                                    if x]
+                                    enumerate((model.grid_pipe_lgbm.predict(model.X_test)
+                                               == desired_class)) if x]
 
     def create_explainer(self):
         """
@@ -243,7 +302,6 @@ class LimeReport:
     def get_exp(self, instance_id=None, printout=False):
         """
         Explain one particular instance
-        :param features_to_vary:
         :param printout:
         :return:
         """
@@ -310,26 +368,24 @@ class LimeReport:
 
     def plot_coefs(self, ymax=None, ymin=None):
 
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(14, 8))
         if ymax is not None and ymin is not None:
             plt.ylim(ymax, ymin)
         if len(self.subset) <= 30 or not self.slime:
-            sns.stripplot(data=self.allcoefs, x='feature', y='lime_coef', dodge=True,
-                          jitter=True, alpha=0.5, marker="h", size=5, hue='instance_id')
-            sns.pointplot(x="feature", y="lime_coef", hue="instance_id",
-                          data=self.allcoefs, dodge=.8 - .8 / 3, join=False,
-                          markers="d", scale=0.75, ci=None, alpha=0.5)
+            sns.stripplot(data=self.allcoefs, x='feature', y='lime_coef',
+                          jitter=True, alpha=0.5, marker="h", size=5)
+            # sns.pointplot(x="feature", y="lime_coef", hue="instance_id",
+            #               data=self.allcoefs, dodge=.8 - .8 / 3, join=False,
+            #               markers="d", scale=0.75, ci=None, alpha=0.5)
         else:
             sns.pointplot(x="feature", y="lime_coef", hue="instance_id",
                           data=self.allcoefs, dodge=.8 - .8 / 3, join=False,
                           scale=0.5, ci=None, alpha=0.5, marker="d")
-        sns.pointplot(x="feature", y="lime_coef", color='black',
-                      data=self.allcoefs, join=False,
-                      markers="d", scale=1, ci='sd', zorder=1000)
 
         plt.axhline(0)
-        plt.title('Lime coefficients for changeable features (colored by instances)')
+        plt.title('Lime coefficients for changeable features')
         plt.legend([], [], frameon=False)
+        plt.xticks(rotation=90)
 
 
 class ShapReport:
@@ -342,9 +398,7 @@ class ShapReport:
         if self.features_to_vary is None:
             self.features_to_vary = self.model.names
 
-        self.instances_to_change = [i for i, x in
-                                    enumerate((model.grid_pipe_lgbm.predict(model.X_test) == desired_class))
-                                    if x]
+        self.instances_to_change = [i for i, x in enumerate((model.grid_pipe_lgbm.predict(model.X_test) == desired_class)) if x]
 
     def create_explainer(self):
         shap.initjs()
@@ -353,14 +407,14 @@ class ShapReport:
 
     def evaluate_dataset(self, cfs=None, save=False, name=''):
 
-        self.shap_values_0 = pd.DataFrame(self.shap_values[0], columns=self.model.names)[self.features_to_vary]
-        self.shap_values_0['instance_id'] = self.shap_values_0.index
+        self.shap_values_ = pd.DataFrame(self.shap_values[self.desired_class], columns=self.model.names)[self.features_to_vary]
+        self.shap_values_['instance_id'] = self.shap_values_.index
 
         if cfs is not None:
             self.subset = list(cfs.keys())
-            self.shap_values_0 = self.shap_values_0[self.shap_values_0.instance_id.isin(self.subset)]
+            self.shap_values_ = self.shap_values_[self.shap_values_.instance_id.isin(self.subset)]
 
-        self.shap_long = pd.melt(self.shap_values_0, id_vars=['instance_id'],
+        self.shap_long = pd.melt(self.shap_values_, id_vars=['instance_id'],
                                  value_vars=self.features_to_vary,
                                  var_name='feature', value_name='shap_value')
 
@@ -368,25 +422,26 @@ class ShapReport:
             if name == '':
                 name = f'test_{datetime.datetime.now()}'
             with open(f'../results/shap_{name}.pkl', 'wb') as f:
-                pickle.dump(self.shap_values_0, f, pickle.HIGHEST_PROTOCOL)
+                pickle.dump(self.shap_values_, f, pickle.HIGHEST_PROTOCOL)
 
     def plot_coefs(self, ymax=None, ymin=None):
 
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(14, 6))
         if ymax is not None and ymin is not None:
             plt.ylim(ymax, ymin)
 
         sns.stripplot(x="feature", y="shap_value", data=self.shap_long, alpha=0.5, jitter=0.3)
         plt.axhline(0)
-        plt.title('SHAP coefficients for changeable features (colored by instances)')
+        plt.title('SHAP coefficients for changeable features')
         plt.legend([], [], frameon=False)
+        plt.xticks(rotation=90)
 
 
 class Comparator:
 
     def __init__(self, model, desired_class=0, dice=None, sh=None):
         self.dice = dice
-        self.features_to_vary = [col for col in dice.alldiffs.columns if 'F_' in col]
+        self.features_to_vary = [col for col in dice.alldiffs.columns if col != 'instance_id']#'F_' in col]
         self.lime = LimeReport(model, desired_class, slime=True, features_to_vary=self.features_to_vary)
         self.sh = sh
         self.model = model
@@ -397,17 +452,12 @@ class Comparator:
         self.lime.evaluate_dataset(cfs=self.dice.cfs)
 
         tmp = self.lime.aggbyidfeat.reset_index()
-        self.tmp = tmp.pivot_table(index='instance_id', columns='feature', values='lime_coef').reset_index()
+        tmp = tmp.pivot_table(index='instance_id', columns='feature', values='lime_coef').reset_index()
 
-        self.wide = self.dice.alldiffs.merge(self.tmp, how='left', on='instance_id',
+        self.wide = self.dice.alldiffs.merge(tmp, how='left', on='instance_id',
                                              suffixes=['_dice', '_lime'])
 
-        long_dice = pd.melt(self.dice.alldiffs.reset_index(),
-                            id_vars=['instance_id', 'index'],
-                            value_vars=self.features_to_vary,
-                            var_name='feature', value_name='dice_diff')
-
-        self.long = long_dice.merge(self.lime.aggbyidfeat,
+        self.long = self.dice.long_dice.merge(self.lime.aggbyidfeat,
                                     how='left', on=['instance_id', 'feature']) \
             .dropna(how='any', axis=0).sort_values(['instance_id', 'index'])
         self.long['one_sign'] = ~((self.long['dice_diff'] > 0) ^ (self.long['lime_coef'] > 0))
@@ -422,20 +472,19 @@ class Comparator:
         self.sh.create_explainer()
         self.sh.evaluate_dataset(cfs=self.dice.cfs)
 
-        self.long_dice = pd.melt(self.dice.alldiffs.reset_index(),
-                            id_vars=['instance_id', 'index'],
-                            value_vars=self.features_to_vary,
-                            var_name='feature', value_name='dice_diff')
-
-        self.long_sh = self.long_dice.merge(self.sh.shap_long,
-                                how='left', on=['instance_id', 'feature']) \
-                                .dropna(how='any', axis=0).sort_values(['instance_id', 'index'])
+        self.long_sh = self.dice.long_dice.merge(self.sh.shap_long,
+                                            how='left', on=['instance_id', 'feature']) \
+            .dropna(how='any', axis=0).sort_values(['instance_id', 'index'])
         self.long_sh['one_sign'] = ~((self.long_sh['dice_diff'] > 0) ^ (self.long_sh['shap_value'] > 0))
 
         self.sign_correspondence_sh = self.long_sh.groupby('feature')[['one_sign']].mean().sort_values('one_sign')
         self.sign_correspondence_sh.columns = ['% of equal signs']
         print('Share of cases where SHAP coefficient sign is equal to DiCE suggestion sign:')
         print(self.sign_correspondence_sh.round(4) * 100)
+
+    def custom_sorter(self, column):
+        correspondence = {team: order for order, team in enumerate(self.features_to_vary)}
+        return column.map(correspondence)
 
     def compare_instance(self, instance_id=None):
         if instance_id is None:
@@ -445,7 +494,6 @@ class Comparator:
         original = self.dice.cfs[instance_id]['original'][self.features_to_vary].values
         cfs = self.dice.cfs[instance_id]['cfs'][self.features_to_vary].iloc[0].values
         mask = (original != cfs)
-
         changed_features = list(compress(self.features_to_vary, mask))
         original = list(compress(original, mask))
         cfs = list(compress(cfs, mask))
@@ -470,7 +518,7 @@ class Comparator:
         # LIME
         self.lime.get_exp(instance_id=instance_id, printout=False)
 
-        tmp = self.lime.lime_pred.sort_values('feature').copy()
+        tmp = self.lime.lime_pred.sort_values(by='feature', key=self.custom_sorter)
 
         fig = go.Figure(go.Bar(
             x=tmp.feature,
@@ -493,10 +541,10 @@ class Comparator:
             print(f"""Stabilized-LIME coefficient sign for {feat} {text} with DiCE suggestion""")
 
         # SHAP
-        tmp = self.sh.shap_long.query('instance_id == @instance_id').sort_values('feature')
+        tmp = self.sh.shap_long.query('instance_id == @instance_id').sort_values(by='feature', key=self.custom_sorter)
 
         fig = go.Figure(go.Bar(
-            x=self.tmp['feature'],
+            x=tmp['feature'],
             text=list(tmp['shap_value'].round(4).astype(str).values),
             y=list(tmp['shap_value'].round(4).values),
         ))
@@ -514,3 +562,41 @@ class Comparator:
             text = 'corresponds' if (dice_sign == shap_sign) else 'doesn\'t correspond'
 
             print(f"""SHAP coefficient sign for {feat} {text} with DiCE suggestion""")
+
+        # PDP_ICE
+        print('')
+        print("Plotting PDP-ICE...")
+        plot_pdp_ice(self.model.grid_pipe_lgbm, self.model.X_train, changed_features,
+                     original=original, cfs=cfs)
+
+        # PDP
+        if len(changed_features) == 2:
+
+            features = [changed_features[0], changed_features[1], tuple(changed_features)]
+            print('')
+            print("Computing partial dependence plots...")
+            fig, ax = plt.subplots(ncols=3, figsize=(10, 5))
+
+            display = PartialDependenceDisplay.from_estimator(
+                self.model.grid_pipe_lgbm,
+                self.model.X_train,
+                features,
+                kind="average",
+                n_jobs=3,
+                grid_resolution=20,
+                ax=ax
+            )
+
+            # pred = self.model.grid_pipe_lgbm.predict_proba(self.model.X_test.iloc[[instance_id]])[0][1]
+
+            ax[0].axvline(original[0], color='red', linestyle='--', label='original')
+            ax[0].axvline(cfs[0], color='green', linestyle='--', label='counerfactual')
+
+            ax[1].axvline(original[1], color='red', linestyle='--', label='original')
+            ax[1].axvline(cfs[1], color='green', linestyle='--', label='counerfactual')
+
+            display.figure_.suptitle(
+                "Partial dependence of target value (probability of class 1) \n (red - original, green - counterfactual)"
+            )
+            display.figure_.subplots_adjust(wspace=0.4, hspace=0.3)
+

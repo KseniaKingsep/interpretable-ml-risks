@@ -10,7 +10,11 @@ from lightgbm import LGBMClassifier
 from sklearn.metrics import roc_auc_score, confusion_matrix, recall_score, precision_score
 from sklearn.impute import SimpleImputer
 
-# TODO switch to yaml config
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.CRITICAL)
+
 
 # lgbm_params = {
 #                 'learning_rate': [0.01,0.03,0.05,0.1,0.15,0.2],

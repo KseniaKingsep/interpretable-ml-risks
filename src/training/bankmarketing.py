@@ -12,9 +12,12 @@ from lightgbm import LGBMClassifier
 from sklearn.pipeline import make_pipeline, Pipeline
 from sklearn.metrics import roc_auc_score, confusion_matrix, recall_score, precision_score
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.impute import SimpleImputer, KNNImputer
 
-# TODO switch to yaml config
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.CRITICAL)
+
 ord_edu = ['illiterate', 'basic.4y', 'basic.6y', 'basic.9y', 'unknown', 'high.school',
            'professional.course', 'university.degree']
 
@@ -26,10 +29,6 @@ lgbm_params = {
                 'subsample': [0.4, 0.8, 1],
                 'is_unbalance': [True],
               }
-
-
-def to_str(x):
-    return pd.DataFrame(x).astype(str)
 
 
 def cyclic_transformation(column: pd.DataFrame):
@@ -110,6 +109,9 @@ class BankMarketingModel:
             data = pd.read_csv(self.path, sep=';')
         return data
 
+    def to_str(self, x):
+        return pd.DataFrame(x).astype(str)
+
     def preprocess(self, data: pd.DataFrame) -> pd.DataFrame:
         data.replace({'no': 0, 'yes': 1}, inplace=True)
         data.replace({999: -1}, inplace=True)
@@ -138,7 +140,7 @@ class BankMarketingModel:
 
         logarithm_transformer = FunctionTransformer(np.log1p, validate=True)
         log_pipe = make_pipeline(logarithm_transformer, MinMaxScaler())
-        cat_pipe = make_pipeline(FunctionTransformer(to_str), OneHotEncoder(handle_unknown='ignore'))
+        cat_pipe = make_pipeline(FunctionTransformer(self.to_str), OneHotEncoder(handle_unknown='ignore'))
 
         if self.full:
             self.column_transformer = ColumnTransformer([
@@ -160,12 +162,15 @@ class BankMarketingModel:
 
         self.column_transformer.fit(self.X_train)
         self.get_names()
-        self.X_train_enc = pd.DataFrame(self.column_transformer.transform(self.X_train), columns=self.names)
-        self.X_val_enc = pd.DataFrame(self.column_transformer.transform(self.X_val), columns=self.names)
-        self.X_test_enc = pd.DataFrame(self.column_transformer.transform(self.X_test),  columns=self.names)
+        self.X_train = pd.DataFrame(self.column_transformer.transform(self.X_train), columns=self.names)
+        self.X_val = pd.DataFrame(self.column_transformer.transform(self.X_val), columns=self.names)
+        self.X_test = pd.DataFrame(self.column_transformer.transform(self.X_test),  columns=self.names)
 
         self.grid_pipe_lgbm = GridSearchCV(LGBMClassifier(), lgbm_params, cv=5, scoring='f1', verbose=1, n_jobs=5)
-        self.grid_pipe_lgbm.fit(self.X_train_enc, self.y_train)
+        self.grid_pipe_lgbm.fit(self.X_train, self.y_train)
+
+    def get_all_pipeline(self):
+        pass
 
     def get_fimp(self, n: int = 20) -> None:
 
@@ -182,15 +187,15 @@ class BankMarketingModel:
 
         pipe = self.grid_pipe_lgbm
         print(
-        " ROC AUC train : ", roc_auc_score(self.y_train, pipe.predict(self.X_train_enc)), '\n',
-        "ROC AUC val : ", roc_auc_score(self.y_val, pipe.predict(self.X_val_enc)), '\n',
-        "ROC AUC test : ", roc_auc_score(self.y_test, pipe.predict(self.X_test_enc)), '\n'
+        " ROC AUC train : ", roc_auc_score(self.y_train, pipe.predict(self.X_train)), '\n',
+        "ROC AUC val : ", roc_auc_score(self.y_val, pipe.predict(self.X_val)), '\n',
+        "ROC AUC test : ", roc_auc_score(self.y_test, pipe.predict(self.X_test)), '\n'
         )
 
-        print("Precision test : ", precision_score(self.y_test, pipe.predict(self.X_test_enc)))
-        print("Recall test : ", recall_score(self.y_test, pipe.predict(self.X_test_enc)))
+        print("Precision test : ", precision_score(self.y_test, pipe.predict(self.X_test)))
+        print("Recall test : ", recall_score(self.y_test, pipe.predict(self.X_test)))
 
-        confusion_matrix = pd.crosstab(self.y_test, pipe.predict(self.X_test_enc),
+        confusion_matrix = pd.crosstab(self.y_test, pipe.predict(self.X_test),
                                        rownames=['Actual'], colnames=['Predicted'])
         sns.heatmap(confusion_matrix, annot=True, fmt='.1f')
         plt.show()
