@@ -22,12 +22,12 @@ ord_edu = ['illiterate', 'basic.4y', 'basic.6y', 'basic.9y', 'unknown', 'high.sc
            'professional.course', 'university.degree']
 
 lgbm_params = {
-                'learning_rate': [0.01,0.03,0.05,0.1,0.15,0.2],
-                'max_depth': [6,8,10,12,16],
-                'num_leaves': [8,16,32,64,96,144],
-                'feature_fraction': [0.4, 0.8, 1],
-                'subsample': [0.4, 0.8, 1],
-                'is_unbalance': [True],
+                'lgbmclassifier__learning_rate': [0.01,0.03,0.05,0.1,0.15,0.2],
+                'lgbmclassifier__max_depth': [6,8,10,12,16],
+                'lgbmclassifier__num_leaves': [8,16,32,64,96,144],
+                'lgbmclassifier__feature_fraction': [0.4, 0.8, 1],
+                'lgbmclassifier__subsample': [0.4, 0.8, 1],
+                'lgbmclassifier__is_unbalance': [True],
               }
 
 
@@ -77,6 +77,7 @@ class BankMarketingModel:
         self.y_val = None
         self.cont_feats = []
         self.cont_feats_excl = []
+        self.target = 'y'
 
         # include current campaign data
         if self.full:
@@ -116,17 +117,59 @@ class BankMarketingModel:
         data.replace({'no': 0, 'yes': 1}, inplace=True)
         data.replace({999: -1}, inplace=True)
         data.default.replace({'unknown': 1}, inplace=True)
+        data['campaign'] = data['campaign'].astype(float)
         return data
 
     def get_names(self):
+
+        self.names = self.categorical_cols + self.num_cols + self.log_cols + self.other_cols
+        self.inner_names = list(self.grid_pipe_lgbm.best_estimator_.named_steps['columntransformer'] \
+                .transformers_[0][1][1].get_feature_names_out(
+                self.categorical_cols)) + self.num_cols + self.log_cols + self.other_cols
+
+    def train_separate_model(self):
+
+        logarithm_transformer = FunctionTransformer(np.log1p, validate=True)
+        log_pipe = make_pipeline(logarithm_transformer, MinMaxScaler())
+        cat_pipe = make_pipeline(FunctionTransformer(self.to_str), OneHotEncoder(handle_unknown='ignore'))
+
         if self.full:
-            self.names = list(self.column_transformer.named_transformers_['ohe']
+            self.column_transformer_sep = ColumnTransformer([
+                ('ohe', cat_pipe, self.categorical_cols),
+                ('scale', IdentityTransformer(), self.num_cols),
+                ('log', log_pipe, self.log_cols),
+            ],
+                remainder='passthrough', verbose=0
+            )
+        else:
+            self.column_transformer_sep = ColumnTransformer([
+                ('ohe', cat_pipe, self.categorical_cols),
+                ('scale', IdentityTransformer(), self.num_cols),
+                ('log', log_pipe, self.log_cols),
+                ('dropper', 'drop', self.current_campaign_cols),
+            ],
+                remainder='passthrough', verbose=0
+            )
+
+        self.column_transformer_sep.fit(self.X_train)
+
+        if self.full:
+            self.names_sep = list(self.column_transformer_sep.named_transformers_['ohe']
                      .named_steps['onehotencoder'].get_feature_names_out(self.categorical_cols)) \
                      + self.num_cols + self.log_cols + self.other_cols
         else:
-            self.names = list(self.column_transformer.named_transformers_['ohe']
+            self.names_sep = list(self.column_transformer_sep.named_transformers_['ohe']
                     .named_steps['onehotencoder'].get_feature_names_out(self.categorical_cols)) \
                     + self.num_cols + self.log_cols + self.other_cols
+
+        self.X_train_sep = pd.DataFrame(self.column_transformer_sep.transform(self.X_train), columns=self.names_sep)
+        self.X_val_sep = pd.DataFrame(self.column_transformer_sep.transform(self.X_val), columns=self.names_sep)
+        self.X_test_sep = pd.DataFrame(self.column_transformer_sep.transform(self.X_test),  columns=self.names_sep)
+
+        self.grid_pipe_lgbm_sep = LGBMClassifier(**{k[16:]: v for k, v in self.grid_pipe_lgbm.best_params_.items()},
+                                                 scoring='f1', verbose=1, n_jobs=5)
+        self.grid_pipe_lgbm_sep.fit(self.X_train_sep, self.y_train)
+
 
     def train_model(self) -> None:
 
@@ -145,7 +188,7 @@ class BankMarketingModel:
         if self.full:
             self.column_transformer = ColumnTransformer([
                 ('ohe', cat_pipe, self.categorical_cols),
-                ('scale', IdentityTransformer(),self.num_cols), #MinMaxScaler()
+                ('scale', IdentityTransformer(),self.num_cols),
                 ('log', log_pipe, self.log_cols),
             ],
                 remainder='passthrough', verbose=0
@@ -153,49 +196,50 @@ class BankMarketingModel:
         else:
             self.column_transformer = ColumnTransformer([
                 ('ohe', cat_pipe, self.categorical_cols),
-                ('scale', IdentityTransformer(), self.num_cols), #MinMaxScaler()
+                ('scale', IdentityTransformer(), self.num_cols),
                 ('log', log_pipe, self.log_cols),
                 ('dropper', 'drop', self.current_campaign_cols),
             ],
                 remainder='passthrough', verbose=0
             )
 
-        self.column_transformer.fit(self.X_train)
-        self.get_names()
-        self.X_train = pd.DataFrame(self.column_transformer.transform(self.X_train), columns=self.names)
-        self.X_val = pd.DataFrame(self.column_transformer.transform(self.X_val), columns=self.names)
-        self.X_test = pd.DataFrame(self.column_transformer.transform(self.X_test),  columns=self.names)
-
-        self.grid_pipe_lgbm = GridSearchCV(LGBMClassifier(), lgbm_params, cv=5, scoring='f1', verbose=1, n_jobs=5)
+        # train whole pipeline
+        self.grid_pipe_lgbm = GridSearchCV(make_pipeline(self.column_transformer, LGBMClassifier()),
+                                           lgbm_params, cv=5, scoring='f1', verbose=2, n_jobs=5)
         self.grid_pipe_lgbm.fit(self.X_train, self.y_train)
-
-    def get_all_pipeline(self):
-        pass
+        self.get_names()
 
     def get_fimp(self, n: int = 20) -> None:
+        pass
+        #TODO fix AttributeError: 'Pipeline' object has no attribute 'feature_importances_'
 
-        df_feature_importance = (
-            pd.DataFrame({'importance': self.grid_pipe_lgbm.best_estimator_.feature_importances_,
-            }, index=self.names).sort_values('importance', ascending=False)
-        )
+        # df_feature_importance = (
+        #     pd.DataFrame({'importance': self.grid_pipe_lgbm.best_estimator_.feature_importances_,
+        #     }, index=self.names).sort_values('importance', ascending=False)
+        # )
+        #
+        # plt.figure(figsize=(10, 6))
+        # sns.barplot(df_feature_importance.head(n).importance,
+        #             df_feature_importance.head(n).index, palette='mako');
 
-        plt.figure(figsize=(10, 6))
-        sns.barplot(df_feature_importance.head(n).importance,
-                    df_feature_importance.head(n).index, palette='mako');
+    def print_metrics(self, use_sep_model=False) -> None:
 
-    def print_metrics(self) -> None:
+        # pipe = self.grid_pipe_lgbm
+        pipe = self.grid_pipe_lgbm_sep if use_sep_model else self.grid_pipe_lgbm
+        X_train = self.X_train_sep if use_sep_model else self.X_train
+        X_val = self.X_val_sep if use_sep_model else self.X_val
+        X_test = self.X_test_sep if use_sep_model else self.X_test
 
-        pipe = self.grid_pipe_lgbm
         print(
-        " ROC AUC train : ", roc_auc_score(self.y_train, pipe.predict(self.X_train)), '\n',
-        "ROC AUC val : ", roc_auc_score(self.y_val, pipe.predict(self.X_val)), '\n',
-        "ROC AUC test : ", roc_auc_score(self.y_test, pipe.predict(self.X_test)), '\n'
+        " ROC AUC train : ", roc_auc_score(self.y_train, pipe.predict(X_train)), '\n',
+        "ROC AUC val : ", roc_auc_score(self.y_val, pipe.predict(X_val)), '\n',
+        "ROC AUC test : ", roc_auc_score(self.y_test, pipe.predict(X_test)), '\n'
         )
 
-        print("Precision test : ", precision_score(self.y_test, pipe.predict(self.X_test)))
-        print("Recall test : ", recall_score(self.y_test, pipe.predict(self.X_test)))
+        print("Precision test : ", precision_score(self.y_test, pipe.predict(X_test)))
+        print("Recall test : ", recall_score(self.y_test, pipe.predict(X_test)))
 
-        confusion_matrix = pd.crosstab(self.y_test, pipe.predict(self.X_test),
+        confusion_matrix = pd.crosstab(self.y_test, pipe.predict(X_test),
                                        rownames=['Actual'], colnames=['Predicted'])
         sns.heatmap(confusion_matrix, annot=True, fmt='.1f')
         plt.show()

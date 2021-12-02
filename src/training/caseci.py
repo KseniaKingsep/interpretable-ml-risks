@@ -46,6 +46,8 @@ class CaseCI:
         self.y_test = None
         self.X_val = None
         self.y_val = None
+        self.categorical_cols = []
+        self.target = 'target'
 
     def load_data(self) -> pd.DataFrame:
         """
