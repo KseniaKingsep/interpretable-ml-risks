@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split, GridSearchCV
 from lightgbm import LGBMClassifier
-from sklearn.metrics import roc_auc_score, confusion_matrix, recall_score, precision_score
+from sklearn.metrics import roc_auc_score, confusion_matrix, recall_score, precision_score, f1_score
 from sklearn.impute import SimpleImputer
 
 import logging
@@ -112,12 +112,14 @@ class CaseCI:
 
         print("Precision test : ", precision_score(self.y_test, pipe.predict(self.X_test)))
         print("Recall test : ", recall_score(self.y_test, pipe.predict(self.X_test)))
+        print("F-1 test : ", f1_score(self.y_test, pipe.predict(self.X_test)))
 
         confusion_matrix = pd.crosstab(self.y_test, pipe.predict(self.X_test),
                                        rownames=['Actual'], colnames=['Predicted'])
         sns.heatmap(confusion_matrix, annot=True, fmt='.1f')
+        plt.title('Confusion matrix for Case model')
         plt.show()
-        # print(confusion_matrix(self.y_test, pipe.predict(self.X_test)))
+        print(confusion_matrix)
 
     def save_pipe(self, n, name):
         addstr = 'full' if self.full else 'reduced'

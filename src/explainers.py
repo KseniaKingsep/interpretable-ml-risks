@@ -135,28 +135,19 @@ class DiCeReport:
             instance_id = random.choice(self.instances_to_change)
         query_instance = self.model.X_test.iloc[[instance_id]]
 
-        # cnt = 0
-        # print(f"""Start generating cfs for {instance_id}, cnt={cnt}, res={self.res}""")
-        # while not self.res and cnt < 4:
-        #     cnt += 1
-        print(f"""Generating cfs for {instance_id}""")
-        # try:
         try:
             with time_limit(timeout):
                 self.res = self.exp.generate_counterfactuals(query_instance, total_CFs=n_cf,
                                                              desired_class="opposite", verbose=False,
                                                              features_to_vary=self.features_to_vary,
-                                                             permitted_range=self.permitted_range)
+                                                             permitted_range=self.permitted_range,
+                                                             random_seed=7)
                 if printout and self.res:
                     self.res.visualize_as_dataframe(show_only_changes=True)
 
         except TimeoutException as e:
             self.c += 1
             pass
-        print(f"""Stopped generating cfs for {instance_id}""")
-        # except ValueError:
-        #     self.c += 1
-        #     pass
 
     def evaluate_dataset(self, n=None, save=True, name='', timeout=5, printout=False):
 
@@ -170,7 +161,7 @@ class DiCeReport:
         :param printout: print the result
         :return:
         """
-
+        random.seed(7)
         self.subset = self.instances_to_change
         if n is not None:
             if n <= 1:
@@ -206,13 +197,21 @@ class DiCeReport:
         print(
             f"""{round(len(self.instances_to_change) * 100 / len(self.model.X_test), 2)}% of instances of undesired class in the dataset""")
         print(f"""{len(self.subset)} instances of undesired class analyzed""")
-        print(f"""{round(len(self.cfs) * 100 / len(self.subset), 2)}% of successfull explanations""")
+        print(f"""{round(len(self.cfs) * 100 / len(self.subset), 2)}% of successfull explanations, {len(self.cfs)} instances""")
         print(f"""{round(self.c * 100 / len(self.subset), 2)}% of programming package errors""")
         print(
             f"""{round((len(self.subset) - self.c - len(self.cfs)) * 100 / len(self.subset), 2)}% of cases, where no CFs could be found by DiCE""")
         self.additional_good_class = self.get_additional_conversion()
         print(
-            f"""{round(int(self.additional_good_class) * 100 / len(self.subset), 2)}% of additional successes (model quality adjusted)""")
+            f"""{round(int(self.additional_good_class) * 100 / len(self.subset), 2)}% of additional potential successes (model quality adjusted)""")
+        print(
+            f"""{int(self.additional_good_class)} additional potential successes (model quality adjusted)""")
+        # print(
+        #     f"""{round(self.additional_good_class / len(self.subset) * len(self.instances_to_change),2)} additional successes (model quality adjusted)""")
+        print(f"""{int(len(self.instances_to_change)*len(self.cfs) * 100 / len(self.subset)/100)} instances with recommended actions (extrapolated to the whole dataset)""")
+        print(
+            f"""{int(int(self.additional_good_class) * 100 / len(self.subset)*len(self.instances_to_change)/100)} additional successes in a test set  (model quality adjusted)""")
+
         print('')
         self.long_dice = pd.melt(self.alldiffs.reset_index(),
                                  id_vars=['instance_id', 'index'],
@@ -232,19 +231,23 @@ class DiCeReport:
         """
         cfdf = res['cfs']
         df = res['original']
-        # diffs = cfdf[(cfdf - df).ne(0)].drop(columns=self.model.target)
-        # deal with numeric features
         numeric = [col for col in self.model.names if col not in self.model.categorical_cols]
         diffs = cfdf[numeric].astype(float)[
             (cfdf[numeric].astype(float) - df[numeric].astype(float)).ne(0)]  # .drop(columns=['target'])
         diffs['instance_id'] = row
 
         # deal with categorical (including text) features
-        diffs_cat = (cfdf[self.model.categorical_cols].astype(str) + ' --> ' + df[self.model.categorical_cols].astype(str))
+        if len(self.model.categorical_cols) == 0:
+            return diffs
+        print(f'try to find categorical_cols')
+        diffs_cat = (cfdf[self.model.categorical_cols].astype(str) + ' --> ' + df[self.model.categorical_cols].astype(
+            str))
         mask = (cfdf[self.model.categorical_cols] != df[self.model.categorical_cols])
+        print(mask)
         changed_cat_cols = list(cfdf[self.model.categorical_cols].columns[mask.values[0]])
         if len(changed_cat_cols) == 0:
             return diffs
+        print(f""" !!!!!!!! {changed_cat_cols}""")
         return pd.concat([diffs, diffs_cat[mask]], axis=1)
 
     def combine_all_cf_diffs(self):
@@ -252,17 +255,24 @@ class DiCeReport:
         dfs = []
         for row, res in self.cfs.items():
             dfs.append(self.preprocess_cf(row, res))
+        if len(dfs) < 0:
+            raise ValueError('No CFs generated')
         self.alldiffs = pd.concat(dfs, axis=0)
         self.alldiffs = self.alldiffs.dropna(axis=1, how='all')
 
-    def plot_diffs(self, x=None, y=None):
+    def plot_diffs(self, x=None, y=None, columns=None):
 
         if x is not None and y is not None:
             plt.figure(figsize=(x, y))
             plt.xticks(rotation=45)
-        sns.stripplot(data=self.alldiffs.drop(columns='instance_id'),
-                      jitter=True, alpha=0.7, marker="h", size=5)
+        if columns is not None:
+            sns.stripplot(data=self.alldiffs.drop(columns='instance_id')[columns],
+                          jitter=True, alpha=0.7, marker="h", size=5)
+        else:
+            sns.stripplot(data=self.alldiffs.drop(columns='instance_id'),
+                          jitter=True, alpha=0.7, marker="h", size=5)
         plt.xticks(rotation=45)
+        plt.axhline(0)
         plt.title('Changes to variables to obtain counterfactuals')
 
     def get_additional_conversion(self):
@@ -282,16 +292,22 @@ class LimeReport:
         self.model = model
         self.slime = slime
         self.desired_class = desired_class
-        self.estimator = self.model.grid_pipe_lgbm_sep if use_sep_model else self.model.grid_pipe_lgbm
 
+        if use_sep_model:
+            self.estimator = self.model.grid_pipe_lgbm_sep
+        else:
+            self.estimator = self.model.grid_pipe_lgbm.best_estimator_
+
+        self.names = self.model.names_sep if use_sep_model else self.model.names
         self.features_to_vary = features_to_vary
         if self.features_to_vary is None:
-            self.features_to_vary = self.model.names
+            self.features_to_vary = self.names
 
         self.X_test_lime = self.model.X_test_sep if use_sep_model else self.model.X_test
         self.X_train_lime = self.model.X_test_sep if use_sep_model else self.model.X_test
 
-        self.instances_to_change = [i for i, x in enumerate((self.estimator.predict(self.X_test_lime) == desired_class)) if x]
+        self.instances_to_change = [i for i, x in enumerate((self.estimator.predict(self.X_test_lime) == desired_class))
+                                    if x]
 
     def create_explainer(self):
         """
@@ -383,16 +399,8 @@ class LimeReport:
         plt.figure(figsize=(14, 8))
         if ymax is not None and ymin is not None:
             plt.ylim(ymax, ymin)
-        if len(self.subset) <= 30 or not self.slime:
-            sns.stripplot(data=self.allcoefs, x='feature', y='lime_coef',
-                          jitter=True, alpha=0.5, marker="h", size=5)
-            # sns.pointplot(x="feature", y="lime_coef", hue="instance_id",
-            #               data=self.allcoefs, dodge=.8 - .8 / 3, join=False,
-            #               markers="d", scale=0.75, ci=None, alpha=0.5)
-        else:
-            sns.pointplot(x="feature", y="lime_coef", hue="instance_id",
-                          data=self.allcoefs, dodge=.8 - .8 / 3, join=False,
-                          scale=0.5, ci=None, alpha=0.5, marker="d")
+        sns.stripplot(data=self.allcoefs, x='feature', y='lime_coef',
+                          jitter=0.3, alpha=0.5, marker="h", size=3)
 
         plt.axhline(0)
         plt.title('Lime coefficients for changeable features')
@@ -410,11 +418,16 @@ class ShapReport:
         self.features_to_vary = features_to_vary
         if self.features_to_vary is None:
             self.features_to_vary = self.names
-        self.estimator = self.model.grid_pipe_lgbm_sep if use_sep_model else self.model.grid_pipe_lgbm.best_estimator_
+
+        if use_sep_model:
+            self.estimator = self.model.grid_pipe_lgbm_sep
+        else:
+            self.estimator = self.model.grid_pipe_lgbm.best_estimator_
 
         self.X_test_shap = self.model.X_test_sep if use_sep_model else self.model.X_test
 
-        self.instances_to_change = [i for i, x in enumerate((self.estimator.predict(self.X_test_shap) == desired_class)) if x]
+        self.instances_to_change = [i for i, x in enumerate((self.estimator.predict(self.X_test_shap) == desired_class))
+                                    if x]
 
     def create_explainer(self):
         shap.initjs()
@@ -443,11 +456,11 @@ class ShapReport:
 
     def plot_coefs(self, ymax=None, ymin=None):
 
-        plt.figure(figsize=(14, 6))
+        plt.figure(figsize=(14, 10))
         if ymax is not None and ymin is not None:
             plt.ylim(ymax, ymin)
 
-        sns.stripplot(x="feature", y="shap_value", data=self.shap_long, alpha=0.5, jitter=0.3)
+        sns.stripplot(x="feature", y="shap_value", data=self.shap_long, alpha=0.5, jitter=0.3, size=3)
         plt.axhline(0)
         plt.title('SHAP coefficients for changeable features')
         plt.legend([], [], frameon=False)
@@ -456,16 +469,21 @@ class ShapReport:
 
 class Comparator:
 
-    def __init__(self, model, desired_class=0, dice=None, sh=None):
+    def __init__(self, model, desired_class=0, dice=None, sh=None, use_sep_model=False):
         self.dice = dice
-        self.features_to_vary = [col for col in dice.alldiffs.columns if col != 'instance_id']
-        self.lime = LimeReport(model, desired_class, slime=True, features_to_vary=self.features_to_vary,
-                               use_sep_model=True)
         self.sh = sh
+        self.features_to_vary = [col for col in dice.alldiffs.columns if col != 'instance_id']
+        self.features_to_vary_ohe = self.features_to_vary
+        if use_sep_model:
+            self.features_to_vary_ohe = [col for col in self.sh.features_to_vary if
+                                     any(s in col for s in self.features_to_vary)]
+        self.lime = LimeReport(model, desired_class, slime=True,
+                               features_to_vary=self.features_to_vary_ohe,
+                               use_sep_model=use_sep_model)
+
         self.model = model
 
     def compare_dice_slime(self):
-
         self.lime.create_explainer()
         self.lime.evaluate_dataset(cfs=self.dice.cfs)
 
@@ -486,6 +504,12 @@ class Comparator:
         print('Share of cases where  SLIME coefficient sign is equal to DiCE suggestion sign:')
         print(self.sign_correspondence.round(4) * 100)
 
+        tmp = self.long.groupby(['index', 'instance_id'])['feature'].apply(lambda x: ', '.join(x)).reset_index()
+        print('')
+        print(f"""Most common changed by DiCE feature sets are: """)
+        for set, cnt in tmp.feature.value_counts().head().iteritems():
+            print(f"""Set [{set}] changed in {round(cnt / len(tmp), 2)}% cases""")
+
     def compare_dice_shap(self):
 
         self.sh.create_explainer()
@@ -502,6 +526,20 @@ class Comparator:
         print('Share of cases where SHAP coefficient sign is equal to DiCE suggestion sign:')
         print(self.sign_correspondence_sh.round(4) * 100)
 
+    def compare_lime_shap(self):
+        self.lime_shap_long = self.long.merge(self.long_sh, on=['instance_id', 'index', 'feature']
+                                              ).query('index==0')
+        self.lime_shap_long['dice_diff_x'] = self.lime_shap_long['dice_diff_x'].astype(float)
+        print(self.lime_shap_long[['lime_coef', 'shap_value', 'dice_diff_x']].corr())
+        print('')
+
+        self.lime_shap_long['one_sign'] = ~((self.lime_shap_long['lime_coef'] > 0) ^
+                                            (self.lime_shap_long['shap_value'] > 0))
+        self.sign_correspondence_l_sh = self.lime_shap_long.groupby('feature')[['one_sign']]\
+                                                            .mean().sort_values('one_sign')
+        self.sign_correspondence_l_sh.columns = ['% of equal signs']
+        print(self.sign_correspondence_l_sh.round(4) * 100)
+
     def custom_sorter(self, column):
         correspondence = {team: order for order, team in enumerate(self.features_to_vary)}
         return column.map(correspondence)
@@ -515,23 +553,25 @@ class Comparator:
         cfs = self.dice.cfs[instance_id]['cfs'][self.features_to_vary].iloc[0].values
         mask = (original != cfs)
         changed_features = list(compress(self.features_to_vary, mask))
+        changed_num_features = [f for f in changed_features if f not in self.model.categorical_cols]
         original = list(compress(original, mask))
         cfs = list(compress(cfs, mask))
 
-        fig = make_subplots(rows=1, cols=len(changed_features), subplot_titles=changed_features)
-
+        fig = make_subplots(rows=1, cols=len(changed_num_features), subplot_titles=changed_num_features)
         for c in range(len(changed_features)):
-            y_rc = [original[c], cfs[c] - original[c], cfs[c]]
-            fig.add_trace(
-                go.Waterfall(x=['original', 'difference', 'counterfactual'], y=y_rc,
-                             orientation="v", name=changed_features[c],
-                             measure=["relative", "relative", "total"],
-                             text=[round(val, 3) for val in y_rc],
-                             connector={"line": {"color": "rgb(63, 63, 63)"}}),
-                row=1, col=c + 1)
+            if changed_features[c] in self.model.categorical_cols:
+                print(f"""{changed_features[c]}: {original[c]} ---> {cfs[c]}""")
+            else:
+                y_rc = [original[c], cfs[c] - original[c], cfs[c]]
+                fig.add_trace(
+                    go.Waterfall(x=['original', 'difference', 'counterfactual'], y=y_rc,
+                                 orientation="v", name=changed_features[c],
+                                 measure=["relative", "relative", "total"],
+                                 text=[round(val, 3) for val in y_rc],
+                                 connector={"line": {"color": "rgb(63, 63, 63)"}}),
+                    row=1, col=c + 1)
 
-        fig.update_layout(height=300, width=800,
-                          title_text=f"""DiCE results for instance {instance_id}""",
+        fig.update_layout(height=300, width=800, title_text=f"""DiCE results for instance {instance_id}""",
                           showlegend=False)
         fig.show()
 
@@ -540,42 +580,37 @@ class Comparator:
         tmp = self.lime.lime_pred.sort_values(by='feature', key=self.custom_sorter)
 
         fig = go.Figure(go.Bar(
-            x=tmp.feature,
-            text=list(tmp.lime_coef.round(4).astype(str).values),
+            x=tmp.feature, text=list(tmp.lime_coef.round(4).astype(str).values),
             y=list(tmp.lime_coef.round(4).values),
         ))
 
-        fig.update_layout(height=400, width=800,
-                          title=f"""SLIME results for instance {instance_id}""",
+        fig.update_layout(height=400, width=800, title=f"""SLIME results for instance {instance_id} """,
                           showlegend=False)
         fig.show()
 
-        for feat in changed_features:
+        for feat in changed_num_features:
             feat_idx = changed_features.index(feat)
             dice_sign = (cfs[feat_idx] - original[feat_idx]) > 0
             lime_sign = list(tmp.lime_coef.round(4).values)[feat_idx] > 0
             text = 'corresponds' if (dice_sign == lime_sign) else 'doesn\'t correspond'
-
             print(f"""Stabilized-LIME coefficient sign for {feat} {text} with DiCE suggestion""")
 
         # SHAP
-        tmp = self.sh.shap_long.query('instance_id == @instance_id').sort_values(by='feature', key=self.custom_sorter)
+        tmp_sh = self.sh.shap_long.query('instance_id == @instance_id').sort_values(
+                            by='feature', key=self.custom_sorter)
+        # tmp_sh = tmp_sh[tmp_sh.feature.isin(tmp.feature.unique())]
 
-        fig = go.Figure(go.Bar(
-            x=tmp['feature'],
-            text=list(tmp['shap_value'].round(4).astype(str).values),
-            y=list(tmp['shap_value'].round(4).values),
-        ))
+        fig = go.Figure(go.Bar(x=tmp_sh['feature'], y=list(tmp_sh['shap_value'].round(4).values),
+                               text=list(tmp_sh['shap_value'].round(4).astype(str).values) ))
 
-        fig.update_layout(height=500, width=800,
-                          title=f"""SHAP results for instance {instance_id}""",
+        fig.update_layout(height=500, width=800, title=f"""SHAP results for instance {instance_id} """,
                           showlegend=False)
         fig.show()
 
-        for feat in changed_features:
+        for feat in changed_num_features:
             feat_idx = changed_features.index(feat)
             dice_sign = (cfs[feat_idx] - original[feat_idx]) > 0
-            shap_sign = list(tmp.shap_value.round(4).values)[feat_idx] > 0
+            shap_sign = list(tmp_sh.shap_value.round(4).values)[feat_idx] > 0
             text = 'corresponds' if (dice_sign == shap_sign) else 'doesn\'t correspond'
 
             print(f"""SHAP coefficient sign for {feat} {text} with DiCE suggestion""")
@@ -583,35 +618,30 @@ class Comparator:
         # PDP_ICE
         print('')
         print("Plotting PDP-ICE...")
-        plot_pdp_ice(self.model.grid_pipe_lgbm, self.model.X_train, changed_features,
+        plot_pdp_ice(self.model.grid_pipe_lgbm, self.model.X_train, changed_num_features,
                      original=original, cfs=cfs)
 
         # PDP
-        if len(changed_features) == 2:
-            features = [changed_features[0], changed_features[1], tuple(changed_features)]
+        if len(changed_num_features) == 2:
+            features = [changed_num_features[0], changed_num_features[1], tuple(changed_num_features)]
             print('')
             print("Computing partial dependence plots...")
             fig, ax = plt.subplots(ncols=3, figsize=(10, 5))
 
             display = PartialDependenceDisplay.from_estimator(
-                self.model.grid_pipe_lgbm,
-                self.model.X_train,
-                features,
-                kind="average",
-                n_jobs=3,
-                grid_resolution=20,
-                ax=ax
+                self.lime.estimator, self.lime.X_train_lime,
+                features, kind="average", n_jobs=3,
+                grid_resolution=20, ax=ax
             )
-
-            # pred = self.model.grid_pipe_lgbm.predict_proba(self.model.X_test.iloc[[instance_id]])[0][1]
 
             ax[0].axvline(original[0], color='red', linestyle='--', label='original')
             ax[0].axvline(cfs[0], color='green', linestyle='--', label='counerfactual')
-
             ax[1].axvline(original[1], color='red', linestyle='--', label='original')
             ax[1].axvline(cfs[1], color='green', linestyle='--', label='counerfactual')
 
             display.figure_.suptitle(
-                "Partial dependence of target value (probability of class 1) \n (red - original, green - counterfactual)"
+                "Partial dependence of target value (probability of class 1) \n (red - original, "
+                "green - counterfactual) "
             )
             display.figure_.subplots_adjust(wspace=0.4, hspace=0.3)
+

@@ -10,7 +10,7 @@ from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder, MinMaxScaler, F
 from sklearn.compose import ColumnTransformer
 from lightgbm import LGBMClassifier
 from sklearn.pipeline import make_pipeline, Pipeline
-from sklearn.metrics import roc_auc_score, confusion_matrix, recall_score, precision_score
+from sklearn.metrics import roc_auc_score, confusion_matrix, recall_score, precision_score, f1_score
 from sklearn.base import BaseEstimator, TransformerMixin
 
 import logging
@@ -105,7 +105,7 @@ class BankMarketingModel:
         if self.path is None:
             path = '/Users/kseniia/OneDrive/MSDS/Thesis/'
             add = 'data/bank-marketing/bank-additional/'
-            data = pd.read_csv(path + add + 'bank-additional.csv', sep=';')
+            data = pd.read_csv(path + add + 'bank-additional-full.csv', sep=';')
         else:
             data = pd.read_csv(self.path, sep=';')
         return data
@@ -238,11 +238,16 @@ class BankMarketingModel:
 
         print("Precision test : ", precision_score(self.y_test, pipe.predict(X_test)))
         print("Recall test : ", recall_score(self.y_test, pipe.predict(X_test)))
+        print("F1 score test : ", f1_score(self.y_test, pipe.predict(X_test)))
+
 
         confusion_matrix = pd.crosstab(self.y_test, pipe.predict(X_test),
                                        rownames=['Actual'], colnames=['Predicted'])
         sns.heatmap(confusion_matrix, annot=True, fmt='.1f')
+        plt.title('Confusion matrix for Bank Marketing model')
         plt.show()
+
+        print(confusion_matrix)
 
     def save_pipe(self, n):
         addstr = 'full' if self.full else 'reduced'
