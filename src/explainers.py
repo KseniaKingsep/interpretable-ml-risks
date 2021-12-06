@@ -195,8 +195,8 @@ class DiCeReport:
         :return:
         """
         print(
-            f"""{round(len(self.instances_to_change) * 100 / len(self.model.X_test), 2)}% of instances of undesired class in the dataset""")
-        print(f"""{len(self.subset)} instances of undesired class analyzed""")
+            f"""{round(len(self.instances_to_change) * 100 / len(self.model.X_test), 2)}% of predicted instances of undesired class in the dataset""")
+        print(f"""{len(self.subset)} predicted instances of undesired class analyzed""")
         print(f"""{round(len(self.cfs) * 100 / len(self.subset), 2)}% of successfull explanations, {len(self.cfs)} instances""")
         print(f"""{round(self.c * 100 / len(self.subset), 2)}% of programming package errors""")
         print(
