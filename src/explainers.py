@@ -232,8 +232,10 @@ class DiCeReport:
         cfdf = res['cfs']
         df = res['original']
         numeric = [col for col in self.model.names if col not in self.model.categorical_cols]
-        diffs = cfdf[numeric].astype(float)[
-            (cfdf[numeric].astype(float) - df[numeric].astype(float)).ne(0)]  # .drop(columns=['target'])
+        # diffs = cfdf[numeric].astype(float)[
+        #     (cfdf[numeric].astype(float) - df[numeric].astype(float)).ne(0)]  # .drop(columns=['target'])
+        tmp_diffs = cfdf[numeric].astype(float) - df[numeric].astype(float)
+        diffs = tmp_diffs.astype(float)[tmp_diffs.ne(0)]
         diffs['instance_id'] = row
 
         # deal with categorical (including text) features
