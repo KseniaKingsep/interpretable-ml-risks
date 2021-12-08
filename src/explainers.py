@@ -25,9 +25,9 @@ logger.setLevel(logging.CRITICAL)
 # TODO add other explainers from notebook
 def plot_pdp_ice(model, train_set, features, title_fill=None, original=None, cfs=None):
     if len(features) < 4:
-        fig, ax = plt.subplots(figsize=(10, 5))
+        fig, ax = plt.subplots(figsize=(10, 3))
     else:
-        fig, ax = plt.subplots(figsize=(10, 10))
+        fig, ax = plt.subplots(figsize=(10, 6))
 
     display = PartialDependenceDisplay.from_estimator(
         model,
@@ -93,7 +93,8 @@ class DiCeReport:
         self.permitted_range = None
         if custom_range:
             self.permitted_range = {}
-            for i, v in self.model.X_train[self.features_to_vary].items():
+            data = self.model.X_test.copy() if custom_range=='test' else self.model.X_train.copy()
+            for i, v in data[self.features_to_vary].items():
                 if i not in self.model.categorical_cols:
                     self.permitted_range[i] = [v.quantile(0.05), v.quantile(0.95)]
                 else:
@@ -106,7 +107,7 @@ class DiCeReport:
         Initialize explainer
         :return:
         """
-
+        self.method = method
         X_dice = self.model.X_train.copy()
         X_dice['target'] = self.model.y_train
 
@@ -142,6 +143,7 @@ class DiCeReport:
                                                              features_to_vary=self.features_to_vary,
                                                              permitted_range=self.permitted_range,
                                                              random_seed=7)
+
                 if printout and self.res:
                     self.res.visualize_as_dataframe(show_only_changes=True)
 
@@ -149,7 +151,7 @@ class DiCeReport:
             self.c += 1
             pass
 
-    def evaluate_dataset(self, n=None, save=True, name='', timeout=5, printout=False):
+    def evaluate_dataset(self, n=None, save=True, name='', timeout=5, printout=False, n_cf=5):
 
         """
 
@@ -171,7 +173,7 @@ class DiCeReport:
         self.c = 0
         self.cfs = {}
         for row in tqdm(self.subset):
-            self.get_cf(instance_id=row, n_cf=5, timeout=timeout, printout=printout)
+            self.get_cf(instance_id=row, n_cf=n_cf, timeout=timeout, printout=printout)
 
             if self.res:
                 if self.res.cf_examples_list[0].final_cfs_df is not None:
@@ -215,14 +217,20 @@ class DiCeReport:
         print('')
         self.long_dice = pd.melt(self.alldiffs.reset_index(),
                                  id_vars=['instance_id', 'index'],
-                                 value_vars=self.alldiffs.columns[:-1],  # self.features_to_vary,
+                                 value_vars=self.alldiffs.columns, #,[:-1],  # self.features_to_vary,
                                  var_name='feature', value_name='dice_diff')
 
         for n_feats, cnt in (self.long_dice.dropna().groupby(['instance_id', 'index']
                                                              ).size().value_counts() / (
                                      self.long_dice.dropna().groupby(['instance_id', 'index']).ngroups)
         ).iteritems():
-            print(f"""In {round(cnt * 100, 2)}% cases {n_feats} features were changes""")
+            print(f"""In {round(cnt * 100, 2)}% cases {n_feats} features were changed""")
+
+        print('')
+        tmp = self.long_dice.dropna().groupby(['instance_id', 'index'])['feature'].unique().astype(str).value_counts()/(
+                                     self.long_dice.dropna().groupby(['instance_id', 'index']).ngroups)
+        for feats, cnt in tmp.iteritems():
+            print(f"""In {100*round(cnt,2)}% cases {feats} features were changed""")
 
     def preprocess_cf(self, row, res):
         """
@@ -262,17 +270,17 @@ class DiCeReport:
         self.alldiffs = pd.concat(dfs, axis=0)
         self.alldiffs = self.alldiffs.dropna(axis=1, how='all')
 
-    def plot_diffs(self, x=None, y=None, columns=None):
+    def plot_diffs(self, x=None, y=None, columns=None, size=3):
 
         if x is not None and y is not None:
             plt.figure(figsize=(x, y))
             plt.xticks(rotation=45)
         if columns is not None:
             sns.stripplot(data=self.alldiffs.drop(columns='instance_id')[columns],
-                          jitter=True, alpha=0.7, marker="h", size=5)
+                          jitter=True, alpha=0.7, marker="h", size=size)
         else:
             sns.stripplot(data=self.alldiffs.drop(columns='instance_id'),
-                          jitter=True, alpha=0.7, marker="h", size=5)
+                          jitter=True, alpha=0.7, marker="h", size=size)
         plt.xticks(rotation=45)
         plt.axhline(0)
         plt.title('Changes to variables to obtain counterfactuals')
@@ -402,7 +410,7 @@ class LimeReport:
         if ymax is not None and ymin is not None:
             plt.ylim(ymax, ymin)
         sns.stripplot(data=self.allcoefs, x='feature', y='lime_coef',
-                          jitter=0.3, alpha=0.5, marker="h", size=3)
+                          jitter=0.3, alpha=0.5, marker="h", size=7)
 
         plt.axhline(0)
         plt.title('Lime coefficients for changeable features')
@@ -462,7 +470,7 @@ class ShapReport:
         if ymax is not None and ymin is not None:
             plt.ylim(ymax, ymin)
 
-        sns.stripplot(x="feature", y="shap_value", data=self.shap_long, alpha=0.5, jitter=0.3, size=3)
+        sns.stripplot(x="feature", y="shap_value", data=self.shap_long, alpha=0.5, jitter=0.3, size=7)
         plt.axhline(0)
         plt.title('SHAP coefficients for changeable features')
         plt.legend([], [], frameon=False)
@@ -546,13 +554,13 @@ class Comparator:
         correspondence = {team: order for order, team in enumerate(self.features_to_vary)}
         return column.map(correspondence)
 
-    def compare_instance(self, instance_id=None):
+    def compare_instance(self, instance_id=None, cf_number=0):
         if instance_id is None:
             instance_id = random.choice(list(self.dice.cfs.keys()))
 
         # DiCE
         original = self.dice.cfs[instance_id]['original'][self.features_to_vary].values
-        cfs = self.dice.cfs[instance_id]['cfs'][self.features_to_vary].iloc[0].values
+        cfs = self.dice.cfs[instance_id]['cfs'][self.features_to_vary].iloc[cf_number].values
         mask = (original != cfs)
         changed_features = list(compress(self.features_to_vary, mask))
         changed_num_features = [f for f in changed_features if f not in self.model.categorical_cols]
@@ -573,7 +581,7 @@ class Comparator:
                                  connector={"line": {"color": "rgb(63, 63, 63)"}}),
                     row=1, col=c + 1)
 
-        fig.update_layout(height=300, width=800, title_text=f"""DiCE results for instance {instance_id}""",
+        fig.update_layout(height=250, width=800, title_text=f"""DiCE results for instance {instance_id}""",
                           showlegend=False)
         fig.show()
 
@@ -595,7 +603,9 @@ class Comparator:
             dice_sign = (cfs[feat_idx] - original[feat_idx]) > 0
             lime_sign = list(tmp.lime_coef.round(4).values)[feat_idx] > 0
             text = 'corresponds' if (dice_sign == lime_sign) else 'doesn\'t correspond'
-            print(f"""Stabilized-LIME coefficient sign for {feat} {text} with DiCE suggestion""")
+            mark = u'\u2713' if (dice_sign == lime_sign) else 'x'
+
+            print(f"""[{mark} {feat}] Stabilized-LIME coefficient sign for {feat} {text} with DiCE suggestion""")
 
         # SHAP
         tmp_sh = self.sh.shap_long.query('instance_id == @instance_id').sort_values(
@@ -605,7 +615,7 @@ class Comparator:
         fig = go.Figure(go.Bar(x=tmp_sh['feature'], y=list(tmp_sh['shap_value'].round(4).values),
                                text=list(tmp_sh['shap_value'].round(4).astype(str).values) ))
 
-        fig.update_layout(height=500, width=800, title=f"""SHAP results for instance {instance_id} """,
+        fig.update_layout(height=300, width=800, title=f"""SHAP results for instance {instance_id} """,
                           showlegend=False)
         fig.show()
 
@@ -614,8 +624,9 @@ class Comparator:
             dice_sign = (cfs[feat_idx] - original[feat_idx]) > 0
             shap_sign = list(tmp_sh.shap_value.round(4).values)[feat_idx] > 0
             text = 'corresponds' if (dice_sign == shap_sign) else 'doesn\'t correspond'
+            mark = u'\u2713' if (dice_sign == shap_sign) else 'x'
 
-            print(f"""SHAP coefficient sign for {feat} {text} with DiCE suggestion""")
+            print(f"""[{mark} {feat}] SHAP coefficient sign for {feat} {text} with DiCE suggestion""")
 
         # PDP_ICE
         print('')
@@ -628,7 +639,7 @@ class Comparator:
             features = [changed_num_features[0], changed_num_features[1], tuple(changed_num_features)]
             print('')
             print("Computing partial dependence plots...")
-            fig, ax = plt.subplots(ncols=3, figsize=(10, 5))
+            fig, ax = plt.subplots(ncols=3, figsize=(10, 4))
 
             display = PartialDependenceDisplay.from_estimator(
                 self.lime.estimator, self.lime.X_train_lime,

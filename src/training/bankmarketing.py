@@ -117,6 +117,7 @@ class BankMarketingModel:
         data.replace({'no': 0, 'yes': 1}, inplace=True)
         data.replace({999: -1}, inplace=True)
         data.default.replace({'unknown': 1}, inplace=True)
+        data[self.num_cols+self.log_cols+self.other_cols] = data[self.num_cols+self.log_cols+self.other_cols].astype(float)
         data['campaign'] = data['campaign'].astype(float)
         return data
 
