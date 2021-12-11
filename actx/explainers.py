@@ -3,7 +3,7 @@ from sklearn.inspection import PartialDependenceDisplay
 from lime.lime_tabular import LimeTabularExplainer
 from slime.lime_tabular import LimeTabularExplainer as sLimeTabularExplainer
 import matplotlib.pyplot as plt
-from src.timelimit import *
+from actx.timelimit import *
 from tqdm.notebook import tqdm
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -23,44 +23,54 @@ logger.setLevel(logging.CRITICAL)
 
 
 # TODO add other explainers from notebook
-def plot_pdp_ice(model, train_set, features, title_fill=None, original=None, cfs=None):
-    if len(features) < 4:
-        fig, ax = plt.subplots(figsize=(10, 3))
-    else:
-        fig, ax = plt.subplots(figsize=(10, 6))
+def plot_pdp_ice(model, train_set, features, title_fill=None, original=None, cfs=None, categorical=False):
 
-    display = PartialDependenceDisplay.from_estimator(
-        model,
-        train_set,
-        features,
-        kind="both",
-        subsample=200,
-        n_jobs=3,
-        grid_resolution=30,
-        random_state=0,
-        ice_lines_kw={"color": "tab:blue", "alpha": 0.2, "linewidth": 0.5},
-        pd_line_kw={"color": "black", "linestyle": "--", "linewidth": 2},
-        ax=ax
-    )
-    if original and cfs:
-        add = 0
-        for i, arr in enumerate(display.axes_):
-            for j, a in enumerate(arr):
-                if a is not None:
-                    display.axes_[i][j].axvline(original[i + j + add], color='red', linestyle=':', label='original')
-                    display.axes_[i][j].axvline(cfs[i + j + add], color='green', linestyle=':', label='cf')
-                    display.axes_[i][j].legend()
-            add = len(display.axes_[i]) - 1
+    if len(features) > 0:
+        if len(features) < 4:
+            fig, ax = plt.subplots(figsize=(15, 5))
+        elif len(features) < 7:
+            fig, ax = plt.subplots(figsize=(15, 10))
+        elif len(features) < 10:
+            fig, ax = plt.subplots(figsize=(15, 15))
+        else:
+            fig, ax = plt.subplots(figsize=(15, 20-8))
 
-    if title_fill:
-        display.figure_.suptitle(
-            f"""Partial dependence of target value on {title_fill[0]}\n"""
-            f"""for the {title_fill[1]} dataset, with {title_fill[2]}"""
+        display = PartialDependenceDisplay.from_estimator(
+            model,
+            train_set,
+            features,
+            kind="both",
+            subsample=200,
+            n_jobs=3,
+            grid_resolution=30,
+            random_state=0,
+            ice_lines_kw={"color": "tab:blue", "alpha": 0.2, "linewidth": 0.5},
+            pd_line_kw={"color": "black", "linestyle": "--", "linewidth": 2},
+            ax=ax
         )
-    else:
-        display.figure_.suptitle(
-            f"""Partial dependence of target value (probability of class 1) (red - original, green - counterfactual)""")
-    display.figure_.subplots_adjust(wspace=0.2, hspace=0.4)
+        if original and cfs:
+            add = 0
+            for i, arr in enumerate(display.axes_):
+                for j, a in enumerate(arr):
+                    if a is not None:
+                        display.axes_[i][j].axvline(original[i + j + add], color='red', linestyle=':', label='original')
+                        display.axes_[i][j].axvline(cfs[i + j + add], color='green', linestyle=':', label='cf')
+                        display.axes_[i][j].legend()
+                add = len(display.axes_[i]) - 1
+
+
+        if title_fill:
+            display.figure_.suptitle(
+                f"""Partial dependence of target value on {title_fill[0]}\n"""
+                f"""for the {title_fill[1]} dataset, with {title_fill[2]}"""
+            )
+        else:
+            if not categorical:
+                display.figure_.suptitle(
+                    f"""Partial dependence of target value (probability of class 1) (red - original, green - counterfactual)""")
+            else:
+                display.figure_.suptitle(f"""Partial dependence of target value (probability of class 1)""")
+        display.figure_.subplots_adjust(wspace=0.2, hspace=0.4)
 
 
 class DiCeReport:
@@ -250,7 +260,7 @@ class DiCeReport:
         if len(self.model.categorical_cols) == 0:
             return diffs
         print(f'try to find categorical_cols')
-        diffs_cat = (cfdf[self.model.categorical_cols].astype(str) + ' --> ' + df[self.model.categorical_cols].astype(
+        diffs_cat = (df[self.model.categorical_cols].astype(str) + ' --> ' + cfdf[self.model.categorical_cols].astype(
             str))
         mask = (cfdf[self.model.categorical_cols] != df[self.model.categorical_cols])
         print(mask)
@@ -518,7 +528,7 @@ class Comparator:
         print('')
         print(f"""Most common changed by DiCE feature sets are: """)
         for set, cnt in tmp.feature.value_counts().head().iteritems():
-            print(f"""Set [{set}] changed in {round(cnt / len(tmp), 2)}% cases""")
+            print(f"""Set [{set}] changed in {round(cnt*100 / len(tmp), 2)}% cases""")
 
     def compare_dice_shap(self):
 
@@ -563,39 +573,45 @@ class Comparator:
         cfs = self.dice.cfs[instance_id]['cfs'][self.features_to_vary].iloc[cf_number].values
         mask = (original != cfs)
         changed_features = list(compress(self.features_to_vary, mask))
+        changed_features_ohe = self.colnames_to_ohe(changed_features)
         changed_num_features = [f for f in changed_features if f not in self.model.categorical_cols]
         original = list(compress(original, mask))
         cfs = list(compress(cfs, mask))
 
-        fig = make_subplots(rows=1, cols=len(changed_num_features), subplot_titles=changed_num_features)
-        for c in range(len(changed_features)):
-            if changed_features[c] in self.model.categorical_cols:
-                print(f"""{changed_features[c]}: {original[c]} ---> {cfs[c]}""")
-            else:
-                y_rc = [original[c], cfs[c] - original[c], cfs[c]]
-                fig.add_trace(
-                    go.Waterfall(x=['original', 'difference', 'counterfactual'], y=y_rc,
-                                 orientation="v", name=changed_features[c],
-                                 measure=["relative", "relative", "total"],
-                                 text=[round(val, 3) for val in y_rc],
-                                 connector={"line": {"color": "rgb(63, 63, 63)"}}),
-                    row=1, col=c + 1)
+        if len(changed_features) > 0:
+            fig = None
+            if len(changed_num_features) > 0:
+                fig = make_subplots(rows=1, cols=len(changed_num_features), subplot_titles=changed_num_features)
+            for c in range(len(changed_features)):
+                if changed_features[c] in self.model.categorical_cols:
+                    print(f"""{changed_features[c]}: {original[c]} ---> {cfs[c]}""")
+                else:
+                    y_rc = [original[c], cfs[c] - original[c], cfs[c]]
+                    fig.add_trace(
+                        go.Waterfall(x=['original', 'difference', 'counterfactual'], y=y_rc,
+                                     orientation="v", name=changed_features[c],
+                                     measure=["relative", "relative", "total"],
+                                     text=[round(val, 3) for val in y_rc],
+                                     connector={"line": {"color": "rgb(63, 63, 63)"}}),
+                        row=1, col=c + 1)
 
-        fig.update_layout(height=250, width=800, title_text=f"""DiCE results for instance {instance_id}""",
-                          showlegend=False)
-        fig.show()
+            if fig:
+                fig.update_layout(height=300, width=800, title_text=f"""DiCE results for instance {instance_id}""",
+                                  showlegend=False)
+                fig.show()
 
         # LIME
         self.lime.get_exp(instance_id=instance_id, printout=False)
         tmp = self.lime.lime_pred.sort_values(by='feature', key=self.custom_sorter)
+        tmp = tmp[tmp['feature'].isin(changed_features_ohe)]
 
         fig = go.Figure(go.Bar(
             x=tmp.feature, text=list(tmp.lime_coef.round(4).astype(str).values),
             y=list(tmp.lime_coef.round(4).values),
         ))
 
-        fig.update_layout(height=400, width=800, title=f"""SLIME results for instance {instance_id} """,
-                          showlegend=False)
+        fig.update_layout(height=200, width=800, title=f"""SLIME results for instance {instance_id} """,
+                          showlegend=False, margin=dict(l=20, r=20, t=30, b=5))
         fig.show()
 
         for feat in changed_num_features:
@@ -605,18 +621,18 @@ class Comparator:
             text = 'corresponds' if (dice_sign == lime_sign) else 'doesn\'t correspond'
             mark = u'\u2713' if (dice_sign == lime_sign) else 'x'
 
-            print(f"""[{mark} {feat}] Stabilized-LIME coefficient sign for {feat} {text} with DiCE suggestion""")
+            print(f"""[{mark} {feat}] S-LIME sign {text} with DiCE""")
 
         # SHAP
         tmp_sh = self.sh.shap_long.query('instance_id == @instance_id').sort_values(
                             by='feature', key=self.custom_sorter)
-        # tmp_sh = tmp_sh[tmp_sh.feature.isin(tmp.feature.unique())]
+        tmp_sh = tmp_sh[tmp_sh.feature.isin(changed_features_ohe)]
 
         fig = go.Figure(go.Bar(x=tmp_sh['feature'], y=list(tmp_sh['shap_value'].round(4).values),
                                text=list(tmp_sh['shap_value'].round(4).astype(str).values) ))
 
-        fig.update_layout(height=300, width=800, title=f"""SHAP results for instance {instance_id} """,
-                          showlegend=False)
+        fig.update_layout(height=350, width=800, title=f"""SHAP results for instance {instance_id} """,
+                          showlegend=False, margin=dict(l=30, r=20, t=30, b=5))
         fig.show()
 
         for feat in changed_num_features:
@@ -626,11 +642,10 @@ class Comparator:
             text = 'corresponds' if (dice_sign == shap_sign) else 'doesn\'t correspond'
             mark = u'\u2713' if (dice_sign == shap_sign) else 'x'
 
-            print(f"""[{mark} {feat}] SHAP coefficient sign for {feat} {text} with DiCE suggestion""")
+            print(f"""[{mark} {feat}] SHAP sign {text} with DiCE""")
 
         # PDP_ICE
         print('')
-        print("Plotting PDP-ICE...")
         plot_pdp_ice(self.model.grid_pipe_lgbm, self.model.X_train, changed_num_features,
                      original=original, cfs=cfs)
 
@@ -658,3 +673,23 @@ class Comparator:
             )
             display.figure_.subplots_adjust(wspace=0.4, hspace=0.3)
 
+        if len(self.model.categorical_cols) > 0:
+            original = self.dice.cfs[instance_id]['original'][self.features_to_vary].values
+            cfs = self.dice.cfs[instance_id]['cfs'][self.features_to_vary].iloc[cf_number].values
+            mask = (original != cfs)
+            changed_features = list(compress(self.features_to_vary, mask))
+            changed_cat_features = [f for f in changed_features if f in self.model.categorical_cols]
+            changed_cat_features_ohe = self.colnames_to_ohe(changed_cat_features)
+
+            if len(changed_cat_features_ohe) > 0:
+                plot_pdp_ice(self.model.grid_pipe_lgbm_sep, self.model.X_train_sep, changed_cat_features_ohe,
+                             categorical=True)
+
+    def colnames_to_ohe(self, colnames):
+        colnames_ohe = []
+        for colname in colnames:
+            for ohe_name in self.model.inner_names:
+                if colname in ohe_name:
+                    colnames_ohe.append(ohe_name)
+
+        return colnames_ohe
