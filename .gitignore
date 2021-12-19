@@ -127,3 +127,6 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+!/notebooks/.ipynb_checkpoints/
+!/notebooks/pipe_02.pkl
+!/notebooks/pipe_excl_02.pkl
